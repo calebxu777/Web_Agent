@@ -59,7 +59,10 @@ export CONFIG_PATH="$PROJECT_ROOT/config/settings.yaml"
 
 # ---- Full install (first time) ----
 if [ "$1" = "--install" ]; then
-    echo -e "${GREEN}Installing dependencies...${NC}"
+    echo -e "${GREEN}Installing PyTorch with CUDA 12.1...${NC}"
+    conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia -y
+    
+    echo -e "${GREEN}Installing remaining dependencies...${NC}"
     pip install --upgrade pip
     pip install -r "$PROJECT_ROOT/requirements.txt"
 
