@@ -119,12 +119,6 @@ class AgentConfig:
     gcs_public_url: str = "https://storage.googleapis.com/web-agent-data-caleb-2026"
 
     # ---- Latency/Debug ----
-    # ---- Mock Mode (MVP) ----
-    # True:  Use lightweight mock implementations (no SGLang, Redis, LanceDB, embeddings).
-    #        Enables full API pipeline testing on a laptop without GPU or infra.
-    # False: Real production mode with all models and databases.
-    mock_mode: bool = False
-
     # True:  Log timing for each pipeline stage to stdout.
     log_timing: bool = False
 
@@ -248,7 +242,6 @@ class CommerceAgent:
 
         print(f"\n{'='*60}")
         print(f"  CommerceAgent Cold Start")
-        print(f"  Mock Mode:         {ac.mock_mode}")
         print(f"  Master Brain:      {ac.master_brain_model_name}")
         print(f"  Use Florence:      {ac.use_florence}")
         print(f"  Use Web Search:    {ac.use_web_search}")
@@ -257,33 +250,7 @@ class CommerceAgent:
         print(f"  Top-K Final:       {ac.top_k_final}")
         print(f"{'='*60}\n")
 
-        # ── Mock Mode: lightweight stand-ins, no heavy deps ──
-        if ac.mock_mode:
-            from src.mock import (
-                MockHandymanRouter,
-                MockMasterBrain,
-                MockRetriever,
-                MockEmbedder,
-                MockMemoryManager,
-            )
-            self.handyman = MockHandymanRouter()
-            self.master_brain = MockMasterBrain(model_name=ac.master_brain_model_name)
-            self.retriever = MockRetriever()
-            self.semantic_embedder = MockEmbedder(dimension=1024)
-            self.visual_embedder = MockEmbedder(dimension=768)
-            self.florence_tagger = None
-            self.image_pipeline = None
-            self.web_pipeline = None
-            self.memory = MockMemoryManager()
-            self.sqlite = None
-            self.lancedb = None
-
-            self._initialized = True
-            print("\n✅ CommerceAgent initialized in MOCK MODE (no GPU/Redis/LanceDB needed).\n")
-            return
-
-        # ── Production Mode: real models and databases ──
-        # Lazy imports — only loaded when we actually need heavy deps
+        # Lazy imports — heavy deps loaded at init time, not module import time
         from src.database import LanceDBCatalog, LanceDBMemoryStore, SQLiteCatalog
         from src.embeddings import BGEM3Embedder, DINOv2Embedder
         from src.image_search import Florence2Tagger, ImageSearchPipeline

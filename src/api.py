@@ -29,11 +29,6 @@ config = {}
 nickname_db = None  # SQLite connection for nicknames
 
 
-# -----------------------------------------------------------------
-# Environment-based overrides
-# -----------------------------------------------------------------
-MOCK_MODE = os.environ.get("MOCK_MODE", "1") != "0"
-
 
 # -----------------------------------------------------------------
 # Nickname Database (lightweight SQLite — separate from catalog)
@@ -181,10 +176,8 @@ async def lifespan(app: FastAPI):
         image_storage_provider=provider,
         local_image_base_path=local_path,
         log_timing=True,
-        mock_mode=MOCK_MODE,
     )
 
-    print(f"[FastAPI] mock_mode={ac.mock_mode}")
     agent = CommerceAgent(config=config, agent_config=ac)
 
     # Initialize lightweight DBs (always available, even in mock mode)
@@ -253,7 +246,7 @@ class IngestRequest(BaseModel):
 # -----------------------------------------------------------------
 @app.get("/health")
 async def health():
-    return JSONResponse({"status": "ok", "mock_mode": MOCK_MODE})
+    return JSONResponse({"status": "ok"})
 
 
 # -----------------------------------------------------------------
