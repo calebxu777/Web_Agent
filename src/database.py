@@ -224,19 +224,31 @@ class LanceDBCatalog:
     ):
         """
         Upsert embedding vectors for a batch of products.
-        Pass None for embeddings you don't want to update.
+        Preserves existing embeddings if they are not provided in the current batch.
         """
+        if self.count() > 0:
+            # Fetch existing records to prevent zero-overwrites
+            formatted_ids = ", ".join([f"'{pid}'" for pid in product_ids])
+            existing = self.table.search().limit(len(product_ids)).where(f"product_id IN ({formatted_ids})").to_list()
+            existing_map = {r["product_id"]: r for r in existing}
+        else:
+            existing_map = {}
+
         records = []
         for i, pid in enumerate(product_ids):
+            old = existing_map.get(pid, {})
             record = {"product_id": pid}
+            
             if visual_embeddings is not None:
                 record["visual_embedding"] = visual_embeddings[i].tolist()
             else:
-                record["visual_embedding"] = [0.0] * self.visual_dim
+                record["visual_embedding"] = old.get("visual_embedding") or ([0.0] * self.visual_dim)
+                
             if semantic_embeddings is not None:
                 record["semantic_embedding"] = semantic_embeddings[i].tolist()
             else:
-                record["semantic_embedding"] = [0.0] * self.semantic_dim
+                record["semantic_embedding"] = old.get("semantic_embedding") or ([0.0] * self.semantic_dim)
+                
             records.append(record)
 
         # LanceDB merge_insert for upsert behavior
