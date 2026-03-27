@@ -1,0 +1,45 @@
+# ============================================
+# Compound AI Commerce Agent — Dependencies
+# ============================================
+# Install PyTorch separately via conda first:
+#   conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia
+
+# ---- Core Agent ----
+pyyaml>=6.0
+httpx>=0.27.0
+requests>=2.31.0
+pydantic>=2.0
+
+# ---- Database ----
+lancedb>=0.6.0
+pyarrow>=15.0.0
+
+# ---- Embeddings ----
+# BGE-M3 (text) + DINOv2 (visual)
+torch
+transformers>=4.40.0,<4.45.0
+FlagEmbedding>=1.3.3
+accelerate
+Pillow>=10.0.0
+
+# ---- Web Search ----
+firecrawl-py>=1.0.0
+
+# ---- Dataset Download ----
+datasets>=2.18.0,<4.0  # Pin <4.0: Amazon-Reviews-2023 uses loading scripts
+huggingface_hub>=0.23.0
+tqdm>=4.66.0
+kaggle>=2.0.0
+
+# ---- Cloud Storage ----
+google-cloud-storage>=2.16.0
+
+# ---- Training (optional — only needed for fine-tuning) ----
+# unsloth @ git+https://github.com/unslothai/unsloth.git
+# trl>=0.8.0
+
+# ---- Serving (optional — only needed for model inference) ----
+# sglang[all]>=0.2.0
+
+# ---- Development ----
+numpy>=1.26.0

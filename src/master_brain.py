@@ -1,0 +1,317 @@
+"""
+master_brain.py — The Master Brain (Qwen 3.5-9B)
+==================================================
+The Voice and Reasoning Engine.
+- Synthesizes Top-10 products into High-EQ recommendations (3-5 items)
+- Maintains consistent persona across conversations
+- Generates conversation summaries for ConversationalMemory
+"""
+
+from __future__ import annotations
+
+import json
+from typing import AsyncIterator, Optional
+
+import httpx
+
+from src.schema import ChatMessage
+
+
+# ================================================================
+# System Prompts
+# ================================================================
+
+PERSONA_SYSTEM_PROMPT = """You are a warm, knowledgeable shopping assistant. You combine deep product \
+expertise with genuine empathy. You never hallucinate features — you only recommend products from \
+the provided context. When uncertain, you ask clarifying questions. You speak naturally, like a \
+trusted friend who happens to know everything about shopping.
+
+Key traits:
+- Empathetic: understand the user's needs beyond what they explicitly state
+- Precise: only cite features that exist in the product data
+- Conversational: avoid robotic lists; weave recommendations into natural dialog
+- Decisive: confidently recommend the "best pick" with clear reasoning
+- Helpful: proactively suggest complementary items or alternatives"""
+
+SYNTHESIS_PROMPT_TEMPLATE = """Based on the user's query and the following products, recommend the best 3-5 items.
+
+**User Query:** {query}
+
+**Available Products (Top 10):**
+{products_context}
+
+**Instructions:**
+1. Select the 3-5 BEST products that match the user's needs
+2. For each recommendation, explain WHY it's a great fit
+3. If a product has reviews, reference them naturally
+4. Mention any trade-offs honestly
+5. End with a follow-up question to refine preferences
+
+{memory_context}
+
+Respond naturally — do NOT use numbered lists unless the user asked for them."""
+
+SUMMARY_PROMPT = """Summarize this conversation between a shopping assistant and a customer. \
+Focus on:
+1. What products were discussed (include specific names/brands)
+2. What the customer's preferences are (style, budget, use case)
+3. Any decisions made or items the customer showed interest in
+4. Key topics or themes
+
+Keep it concise (3-5 sentences). This summary will be used to recall context in future conversations.
+
+Conversation:
+{conversation}"""
+
+
+class MasterBrain:
+    """
+    The 9B Master Brain — the reasoning and synthesis engine.
+    Communicates with the SGLang server via OpenAI-compatible API.
+    Supports both synchronous and streaming responses.
+    """
+
+    def __init__(
+        self,
+        api_base: str = "http://localhost:30001/v1",
+        model_name: str = "master_brain",
+        timeout: float = 30.0,
+    ):
+        self.api_base = api_base.rstrip("/")
+        self.model_name = model_name
+        self.timeout = timeout
+        self.client = httpx.Client(timeout=timeout)
+        self.async_client = httpx.AsyncClient(timeout=timeout)
+
+    def _build_messages(
+        self,
+        user_query: str,
+        products: list[dict],
+        chat_history: list[ChatMessage],
+        memory_context: str = "",
+    ) -> list[dict]:
+        """Build the full message list for the synthesis call."""
+        messages = [{"role": "system", "content": PERSONA_SYSTEM_PROMPT}]
+
+        # Add chat history (last N turns from episodic memory)
+        for msg in chat_history:
+            messages.append({"role": msg.role, "content": msg.content})
+
+        # Format product context
+        products_context = self._format_products(products)
+
+        # Build the synthesis prompt
+        memory_section = ""
+        if memory_context:
+            memory_section = f"\n**Previous interactions with this customer:**\n{memory_context}\n"
+
+        synthesis_content = SYNTHESIS_PROMPT_TEMPLATE.format(
+            query=user_query,
+            products_context=products_context,
+            memory_context=memory_section,
+        )
+
+        messages.append({"role": "user", "content": synthesis_content})
+        return messages
+
+    def _format_products(self, products: list[dict]) -> str:
+        """Format product list into readable context for the model."""
+        lines = []
+        for i, p in enumerate(products, 1):
+            parts = [f"**{i}. {p.get('title', 'Unknown')}**"]
+            if p.get("brand"):
+                parts.append(f"   Brand: {p['brand']}")
+            if p.get("price") is not None:
+                parts.append(f"   Price: ${p['price']:.2f}")
+            if p.get("category"):
+                parts.append(f"   Category: {p['category']}")
+            if p.get("description"):
+                desc = p["description"][:300]  # Truncate long descriptions
+                parts.append(f"   Description: {desc}")
+            if p.get("rating") is not None:
+                parts.append(f"   Rating: {p['rating']}/5 ({p.get('review_count', 0)} reviews)")
+            if p.get("reviews_summary"):
+                parts.append(f"   Reviews: {p['reviews_summary'][:200]}")
+            if p.get("image_urls"):
+                urls = p["image_urls"] if isinstance(p["image_urls"], list) else p["image_urls"].split(",")
+                if urls and urls[0]:
+                    parts.append(f"   Image: {urls[0]}")
+            lines.append("\n".join(parts))
+        return "\n\n".join(lines)
+
+    def synthesize(
+        self,
+        user_query: str,
+        products: list[dict],
+        chat_history: list[ChatMessage] = None,
+        memory_context: str = "",
+    ) -> str:
+        """
+        Synchronous synthesis — returns full response.
+        Takes Top-10 products and generates High-EQ recommendation.
+        """
+        messages = self._build_messages(
+            user_query, products, chat_history or [], memory_context
+        )
+
+        response = self.client.post(
+            f"{self.api_base}/chat/completions",
+            json={
+                "model": self.model_name,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 2048,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+
+    async def synthesize_stream(
+        self,
+        user_query: str,
+        products: list[dict],
+        chat_history: list[ChatMessage] = None,
+        memory_context: str = "",
+    ) -> AsyncIterator[str]:
+        """
+        Streaming synthesis — yields tokens as they arrive.
+        Used by the frontend for real-time display.
+        """
+        messages = self._build_messages(
+            user_query, products, chat_history or [], memory_context
+        )
+
+        async with self.async_client.stream(
+            "POST",
+            f"{self.api_base}/chat/completions",
+            json={
+                "model": self.model_name,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 2048,
+                "stream": True,
+            },
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(data_str)
+                        delta = data["choices"][0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
+
+    def general_chat(
+        self,
+        user_message: str,
+        chat_history: list[ChatMessage] = None,
+        memory_context: str = "",
+    ) -> str:
+        """Handle general conversation (no product search needed)."""
+        messages = [{"role": "system", "content": PERSONA_SYSTEM_PROMPT}]
+
+        for msg in (chat_history or []):
+            messages.append({"role": msg.role, "content": msg.content})
+
+        if memory_context:
+            user_message += f"\n\n[Context from previous conversations: {memory_context}]"
+
+        messages.append({"role": "user", "content": user_message})
+
+        response = self.client.post(
+            f"{self.api_base}/chat/completions",
+            json={
+                "model": self.model_name,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 1024,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+
+    async def general_chat_stream(
+        self,
+        user_message: str,
+        chat_history: list[ChatMessage] = None,
+        memory_context: str = "",
+    ) -> AsyncIterator[str]:
+        """Streaming general chat."""
+        messages = [{"role": "system", "content": PERSONA_SYSTEM_PROMPT}]
+
+        for msg in (chat_history or []):
+            messages.append({"role": msg.role, "content": msg.content})
+
+        if memory_context:
+            user_message += f"\n\n[Context from previous conversations: {memory_context}]"
+
+        messages.append({"role": "user", "content": user_message})
+
+        async with self.async_client.stream(
+            "POST",
+            f"{self.api_base}/chat/completions",
+            json={
+                "model": self.model_name,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 1024,
+                "stream": True,
+            },
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(data_str)
+                        delta = data["choices"][0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
+
+    def summarize_conversation(self, messages: list[ChatMessage]) -> str:
+        """
+        Generate a conversation summary for ConversationalMemory.
+        Called at session end.
+        """
+        # Format the conversation
+        conversation_text = ""
+        for msg in messages:
+            role = "Customer" if msg.role == "user" else "Assistant"
+            conversation_text += f"{role}: {msg.content}\n\n"
+
+        prompt = SUMMARY_PROMPT.format(conversation=conversation_text)
+
+        response = self.client.post(
+            f"{self.api_base}/chat/completions",
+            json={
+                "model": self.model_name,
+                "messages": [
+                    {"role": "system", "content": "You are a conversation summarizer."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.3,
+                "max_tokens": 512,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+
+    def close(self):
+        self.client.close()
+
+    async def aclose(self):
+        await self.async_client.aclose()

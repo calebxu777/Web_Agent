@@ -1,0 +1,84 @@
+﻿======================================================================
+  CATALOG QUALITY AUDIT ΓÇö 49686 products
+======================================================================
+
+≡ƒôª CATEGORY BREAKDOWN:
+  Electronics: 9991
+  Clothing & Accessories: 9990
+  Home & Kitchen: 9987
+  Garment Upper body: 8190
+  Garment Lower body: 3876
+  Accessories: 1808
+  Underwear: 1591
+  Garment Full body: 1402
+  Socks & Tights: 861
+  Shoes: 798
+  Swimwear: 623
+  Nightwear: 530
+  Unknown: 14
+  Underwear/nightwear: 14
+  Cosmetic: 9
+  Items: 2
+
+≡ƒÅ╖∩╕Å SOURCE BREAKDOWN:
+  amazon: 29968
+  hm: 19718
+
+≡ƒô¥ TITLE QUALITY:
+  Empty titles: 0
+  Short titles (<10 chars): 3029
+  Avg title length: 72 chars
+
+≡ƒôä DESCRIPTION QUALITY:
+  Has description: 49686 (100.0%)
+  Empty description: 0 (0.0%)
+  Avg description length: 586 chars
+
+≡ƒÆ░ PRICE COVERAGE:
+  Has price: 14904 (30.0%)
+  No price: 34782 (70.0%)
+  Avg price: $57.45
+  Range: $0.01 - $12998.00
+  amazon: 14904/29968 have prices (49.7%)
+  hm: 0/19718 have prices (0.0%)
+
+Γ¡É RATING & REVIEW COVERAGE:
+  Has rating: 29968 (60.3%)
+  Has review count: 29968 (60.3%)
+  Has review summary: 2799 (5.6%)
+  Avg rating: 4.2
+
+≡ƒÅ¬ BRAND COVERAGE:
+  Has brand: 49421 (99.5%)
+  Top brands:
+    H&M: 19718
+    Amazon Renewed: 171
+    Generic: 153
+    Skechers: 105
+    adidas: 97
+    HP: 95
+    Sony: 80
+    New Balance: 77
+    SAMSUNG: 70
+    Nike: 68
+
+≡ƒöº ATTRIBUTES:
+  Has attributes: 49647 (99.9%)
+
+≡ƒû╝∩╕Å IMAGE SAMPLE CHECK:
+  Γ£à [amazon] RELAXURE Adirondack Chair - Foldable Lounge Set wi | N/A | 2.8Γÿà
+  Γ£à [amazon] TRAQ by Alegria Qool Mens Smart Walking Shoe | $69.00 | 4.1Γÿà
+  Γ£à [hm] Meadow trs | N/A | N/A
+  Γ£à [amazon] Valentine Gift for Boyfriend Lets Get It On Candle | $24.00 | 4.3Γÿà
+  Γ£à [amazon] Augiimor 5 Pack RJ45 Coupler, Ethernet Cable Coupl | N/A | 5.0Γÿà
+  Γ£à [hm] Greenville bra (1) | N/A | N/A
+  Γ£à [amazon] LYNK PROFESSIONAL┬« Pull Out Cabinet Organizer (Dou | $70.98 | 4.8Γÿà
+  Γ£à [hm] Duchess lace up hood | N/A | N/A
+  Γ£à [amazon] BULL GUARD RFID Mens Bifold Leather Wallet with 2  | $27.99 | 4.7Γÿà
+  Γ£à [amazon] Mizuno Adult Premier Short Baseball Pant | $50.00 | 4.6Γÿà
+
+≡ƒöì DUPLICATE CHECK:
+  Duplicate groups: 3857
+  Total duplicate products: 11983
+
+======================================================================

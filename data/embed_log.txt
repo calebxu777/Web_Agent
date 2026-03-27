@@ -1,0 +1,87 @@
+﻿python : Warning: You are sending unauthenticated requests 
+to the HF Hub. Please set a HF_TOKEN to enable higher rate 
+limits and faster downloads.
+At line:1 char:32
++ ... erce-agent; python -X utf8 
+scripts/02_extract_embeddings.py --limit 2 ...
++                 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Warning: You a 
+   r...ster downloads.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Catalog size: 46431 products
+  Testing mode: processing 20 products only
+  GPU: NVIDIA GeForce RTX 3050 Laptop GPU (4.3 GB VRAM)
+
+--- Visual Embedding (DINOv2, batch_size=4) ---
+[DINOv2] Loading facebook/dinov2-base on cuda...
+
+Loading weights:   0%|          | 0/223 [00:00<?, ?it/s]
+Loading weights: 100%|ΓûêΓûêΓûêΓûêΓûêΓûêΓûêΓûêΓûêΓûê| 
+223/223 [00:00<00:00, 3750.86it/s]
+[Visual] Extracting embeddings for 20 products...
+
+[Visual] Batches:   0%|          | 0/5 [00:00<?, ?it/s]
+[Visual] Batches:  20%|ΓûêΓûê        | 1/5 [00:01<00:05,  
+1.29s/it]
+[Visual] Batches:  40%|ΓûêΓûêΓûêΓûê      | 2/5 
+[00:01<00:01,  1.61it/s]
+[Visual] Batches:  60%|ΓûêΓûêΓûêΓûêΓûêΓûê    | 3/5 
+[00:01<00:00,  2.48it/s]
+[Visual] Batches:  80%|ΓûêΓûêΓûêΓûêΓûêΓûêΓûêΓûê  | 4/5 
+[00:01<00:00,  3.37it/s]
+[Visual] Batches: 100%|ΓûêΓûêΓûêΓûêΓûêΓûêΓûêΓûêΓûêΓûê| 5/5 
+[00:01<00:00,  4.10it/s]
+[Visual] Batches: 100%|ΓûêΓûêΓûêΓûêΓûêΓûêΓûêΓûêΓûêΓûê| 5/5 
+[00:01<00:00,  2.67it/s]
+[Visual] Done
+
+--- Semantic Embedding (BGE-M3, batch_size=4) ---
+Traceback (most recent call last):
+  File "C:\Users\Caleb\Desktop\Web_Agent\scripts\02_extract_
+embeddings.py", line 243, in <module>
+    main()
+  File "C:\Users\Caleb\Desktop\Web_Agent\scripts\02_extract_
+embeddings.py", line 223, in main
+    semantic_embedder = BGEM3Embedder(
+                        ^^^^^^^^^^^^^^
+  File 
+"C:\Users\Caleb\Desktop\Web_Agent\src\embeddings.py", line 
+137, in __init__
+    from FlagEmbedding import BGEM3FlagModel
+  File "C:\Users\Caleb\miniconda3\envs\commerce-agent\Lib\si
+te-packages\FlagEmbedding\__init__.py", line 2, in <module>
+    from .inference import *
+  File "C:\Users\Caleb\miniconda3\envs\commerce-agent\Lib\si
+te-packages\FlagEmbedding\inference\__init__.py", line 2, 
+in <module>
+    from .auto_reranker import FlagAutoReranker
+  File "C:\Users\Caleb\miniconda3\envs\commerce-agent\Lib\si
+te-packages\FlagEmbedding\inference\auto_reranker.py", line 
+5, in <module>
+    from FlagEmbedding.inference.reranker.model_mapping 
+import (
+  File "C:\Users\Caleb\miniconda3\envs\commerce-agent\Lib\si
+te-packages\FlagEmbedding\inference\reranker\__init__.py", 
+line 1, in <module>
+    from .decoder_only import FlagLLMReranker, 
+LayerWiseFlagLLMReranker, LightWeightFlagLLMReranker
+  File "C:\Users\Caleb\miniconda3\envs\commerce-agent\Lib\si
+te-packages\FlagEmbedding\inference\reranker\decoder_only\__
+init__.py", line 2, in <module>
+    from .layerwise import LayerWiseLLMReranker as 
+LayerWiseFlagLLMReranker
+  File "C:\Users\Caleb\miniconda3\envs\commerce-agent\Lib\si
+te-packages\FlagEmbedding\inference\reranker\decoder_only\la
+yerwise.py", line 15, in <module>
+    from .models.modeling_minicpm_reranker import 
+LayerWiseMiniCPMForCausalLM
+  File "C:\Users\Caleb\miniconda3\envs\commerce-agent\Lib\si
+te-packages\FlagEmbedding\inference\reranker\decoder_only\mo
+dels\modeling_minicpm_reranker.py", line 45, in <module>
+    from transformers.utils import (
+ImportError: cannot import name 
+'is_flash_attn_greater_or_equal_2_10' from 
+'transformers.utils' (C:\Users\Caleb\miniconda3\envs\commerc
+e-agent\Lib\site-packages\transformers\utils\__init__.py)

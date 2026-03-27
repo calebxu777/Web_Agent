@@ -1,0 +1,225 @@
+# ============================================================
+# Compound AI Commerce Agent — Central Configuration
+# ============================================================
+
+# ----------------------------------------------------------
+# Model Stack
+# ----------------------------------------------------------
+models:
+  handyman:
+    model_id: "Qwen/Qwen3.5-0.8B"
+    role: "Router & VLM Specialist"
+    max_tokens: 512
+    temperature: 0.3
+
+  master_brain:
+    model_id: "Qwen/Qwen3.5-9B"
+    role: "Voice & Reasoning Engine"
+    max_tokens: 2048
+    temperature: 0.7
+
+  teacher:
+    model_id: "meta-llama/Llama-3.1-70B-Instruct"
+    quantization: "awq-4bit"
+    api_base: "http://localhost:8000/v1"   # vLLM endpoint on cluster
+    max_tokens: 4096
+    temperature: 0.8
+
+  florence:
+    model_id: "microsoft/Florence-2-large"
+    task_prompt: "<MORE_DETAILED_CAPTION>"
+
+# ----------------------------------------------------------
+# Embedding Models
+# ----------------------------------------------------------
+embeddings:
+  visual:
+    model_id: "facebook/dinov2-base"
+    dimension: 768
+    batch_size: 64
+
+  semantic:
+    model_id: "BAAI/bge-m3"
+    dimension: 1024
+    batch_size: 128
+    use_fp16: true
+    # BGE-M3 supports dense, sparse, and multi-vector retrieval
+    retrieval_modes:
+      - dense
+      - sparse
+
+# ----------------------------------------------------------
+# Databases
+# ----------------------------------------------------------
+databases:
+  sqlite:
+    path: "data/processed/catalog.db"
+    table_name: "products"
+
+  lancedb:
+    path: "data/processed/lancedb"
+    table_name: "product_vectors"
+    metric: "cosine"
+
+# ----------------------------------------------------------
+# Image Storage (local-first, optional cloud for deployment)
+# ----------------------------------------------------------
+image_storage:
+  # "local" for development/demo, "gcs" for production/Vercel deployment
+  provider: "local"
+
+  local:
+    base_path: "C:\\Users\\Caleb\\Desktop\\product_images"
+    # Images served from: {base_path}/{source}/{product_id}.jpg
+    # Frontend accesses via: /api/images/{source}/{product_id}.jpg
+
+  gcs:
+    # Google Cloud Storage — industry standard for production
+    bucket_name: "web-agent-data-caleb-2026"
+    project_id: "webagent2026"
+    # GCS public URL pattern
+    public_url_prefix: "https://storage.googleapis.com/web-agent-data-caleb-2026"
+
+# ----------------------------------------------------------
+# Memory Tiers
+# ----------------------------------------------------------
+memory:
+  episodic:
+    backend: "redis"
+    host: "localhost"
+    port: 6379
+    db: 0
+    max_turns: 10
+    ttl_seconds: 3600
+
+  semantic:
+    backend: "lancedb"
+    path: "data/processed/lancedb"
+    table_name: "user_preferences"
+
+  conversational:
+    backend: "lancedb"
+    path: "data/processed/lancedb"
+    table_name: "conversation_summaries"
+    summary_model: "master_brain"
+    max_summaries_per_user: 50
+
+# ----------------------------------------------------------
+# Dataset Sources
+# ----------------------------------------------------------
+datasets:
+  amazon:
+    raw_path: "data/raw/amazon"
+    format: "jsonl"
+    # Amazon Reviews 2023 (McAuley Lab) — download from HuggingFace
+    # Contains: product metadata + user reviews + image URLs
+    # Reviews fields: rating, review_title, review_text, helpful_vote, verified_purchase
+    categories:
+      - "Clothing_Shoes_and_Jewelry"
+      - "Electronics"
+      - "Home_and_Kitchen"
+    max_products_per_category: 50000
+    include_reviews: true
+    max_reviews_per_product: 10
+
+  hm:
+    raw_path: "data/raw/hm"
+    format: "csv"
+    # H&M Personalized Fashion Recommendations — download from Kaggle
+    # Contains: articles.csv (metadata), images/ (product photos)
+    # No reviews — that's fine, reviews_summary will be empty for H&M products
+    image_subdir: "images"
+    articles_file: "articles.csv"
+
+# ----------------------------------------------------------
+# Training (Unsloth)
+# ----------------------------------------------------------
+training:
+  sft:
+    output_dir: "models/sft_adapter"
+    data_path: "data/training/sft_train.jsonl"
+    num_samples: 8000
+    lora_rank: 64
+    lora_alpha: 128
+    lora_dropout: 0.05
+    learning_rate: 2.0e-4
+    num_epochs: 3
+    batch_size: 4
+    gradient_accumulation_steps: 4
+    max_seq_length: 4096
+    dtype: "bfloat16"
+
+  dpo:
+    output_dir: "models/dpo_adapter"
+    data_path: "data/training/dpo_train.jsonl"
+    num_pairs: 2000
+    beta: 0.1
+    learning_rate: 5.0e-5
+    num_epochs: 1
+    batch_size: 2
+    gradient_accumulation_steps: 8
+    max_seq_length: 4096
+    dtype: "bfloat16"
+
+  quantization:
+    method: "dynamic_2.0"
+    # Dynamic 2.0: keep attention/MLP projection in FP16, FF layers in 4-bit
+    output_dir: "models/quantized"
+    format: "safetensors"
+
+# ----------------------------------------------------------
+# Inference (SGLang)
+# ----------------------------------------------------------
+inference:
+  sglang:
+    handyman_port: 30000
+    master_brain_port: 30001
+    tensor_parallel_size: 1
+    mem_fraction_static: 0.85
+    # EAGLE-2 speculative decoding (EAGLE-3 draft models for Qwen 3.5 not yet available)
+    speculative_decoding:
+      enabled: true
+      method: "eagle2"
+      # 0.8B serves as draft model for 9B
+      num_speculative_tokens: 5
+      # Future: train EAGLE-3 draft via SpecForge
+      eagle3_ready: false
+
+  # RadixAttention KV caching is enabled by default in SGLang
+  kv_caching:
+    enabled: true
+    # Product descriptions are cached automatically
+
+# ----------------------------------------------------------
+# Retrieval
+# ----------------------------------------------------------
+retrieval:
+  top_k_initial: 50          # BGE-M3 / DINOv2 → LanceDB
+  top_k_reranked: 10         # Handyman reranks to 10
+  top_k_final: 5             # Master Brain selects 3-5
+
+  rrf:
+    k: 60                    # Reciprocal Rank Fusion constant
+
+  hard_filters:
+    - "in_stock = 1"
+    # Price filter is dynamic, applied per query
+
+# ----------------------------------------------------------
+# Agent
+# ----------------------------------------------------------
+agent:
+  persona: |
+    You are a warm, knowledgeable shopping assistant. You combine deep product
+    expertise with genuine empathy. You never hallucinate features — you only
+    recommend products from the provided context. When uncertain, you ask
+    clarifying questions. You speak naturally, like a trusted friend who happens
+    to know everything about shopping.
+  
+  intent_classes:
+    - general_talk
+    - text_search
+    - image_search
+    - web_search
+
+  max_conversation_turns: 50

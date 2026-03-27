@@ -1,0 +1,63 @@
+# ====================
+# Data (too large for GitHub)
+# ====================
+data/raw/
+data/processed/images/
+data/processed/lancedb/
+
+# 66MB — stored on GCS instead
+data/processed/catalog.db
+
+# ====================
+# Models (downloaded / trained)
+# ====================
+models/
+
+# ====================
+# Secrets
+# ====================
+gcs-key.json
+.env
+.env.local
+.env.production
+
+# ====================
+# Local product images
+# ====================
+# These are stored at C:\Users\Caleb\Desktop\product_images\
+# and mirrored to GCS (gs://web-agent-data-caleb-2026)
+
+# ====================
+# Python
+# ====================
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+
+# ====================
+# Node / Next.js
+# ====================
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# ====================
+# IDE
+# ====================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ====================
+# OS
+# ====================
+.DS_Store
+Thumbs.db
+desktop.ini
