@@ -68,37 +68,41 @@ export default function ProductCard({ product }) {
       className="animate-fade-in"
       style={{
         display: "flex",
-        gap: "14px",
-        padding: "14px",
+        gap: "16px",
+        padding: "16px",
         borderRadius: "16px",
         border: "1px solid var(--border-light)",
-        backgroundColor: "#fff",
-        transition: "border-color 0.2s, box-shadow 0.2s",
+        backgroundColor: "#ffffff",
+        transition: "all 0.3s cubic-bezier(0.25, 1.0, 0.5, 1.0)",
         cursor: url ? "pointer" : "default",
-        maxWidth: "440px",
+        maxWidth: "400px",
         width: "100%",
+        boxShadow: "0 2px 8px rgba(0, 0, 0, 0.02)",
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.borderColor = "var(--border-hover)";
-        e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.06)";
+        e.currentTarget.style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.08)";
+        e.currentTarget.style.transform = "translateY(-2px) scale(1.01)";
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.borderColor = "var(--border-light)";
-        e.currentTarget.style.boxShadow = "none";
+        e.currentTarget.style.boxShadow = "0 2px 8px rgba(0, 0, 0, 0.02)";
+        e.currentTarget.style.transform = "translateY(0) scale(1)";
       }}
     >
       {/* Product Image */}
       <div
         style={{
-          width: "88px",
-          height: "88px",
-          minWidth: "88px",
+          width: "96px",
+          height: "96px",
+          minWidth: "96px",
           borderRadius: "12px",
           overflow: "hidden",
           backgroundColor: "var(--bubble-user-bg)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
+          boxShadow: "inset 0 0 0 1px rgba(0, 0, 0, 0.04)",
         }}
       >
         {image ? (
@@ -109,7 +113,10 @@ export default function ProductCard({ product }) {
               width: "100%",
               height: "100%",
               objectFit: "cover",
+              transition: "transform 0.5s cubic-bezier(0.25, 1.0, 0.5, 1.0)",
             }}
+            onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.08)")}
+            onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
             onError={(e) => {
               e.target.style.display = "none";
               e.target.parentNode.innerHTML = `

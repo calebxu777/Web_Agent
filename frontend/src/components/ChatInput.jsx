@@ -75,18 +75,13 @@ export default function ChatInput({ onSend, disabled }) {
       )}
 
       <form
+        className="floating-pill"
         onSubmit={handleSubmit}
         style={{
           display: "flex",
           alignItems: "flex-end",
-          backgroundColor: "var(--bubble-user-bg)",
-          borderRadius: "24px",
-          padding: "8px 12px",
-          border: "1px solid transparent",
-          transition: "border 0.2s",
+          padding: "6px 6px 6px 12px",
         }}
-        onFocus={(e) => (e.currentTarget.style.border = "1px solid var(--border-hover)")}
-        onBlur={(e) => (e.currentTarget.style.border = "1px solid transparent")}
       >
         <button
           type="button"

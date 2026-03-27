@@ -121,17 +121,28 @@ export default function Home() {
       <ChatWindow messages={messages} isTyping={isTyping} />
       {pipelineStage && <StatusPipeline stage={pipelineStage} message={pipelineMsg} />}
       <div
-        className="glass-panel"
-        style={{ position: "sticky", bottom: 0, padding: "16px 0 24px", zIndex: 10 }}
+        style={{
+          position: "sticky",
+          bottom: 0,
+          padding: "24px 0 32px",
+          background: "linear-gradient(to top, var(--background) 50%, transparent)",
+          zIndex: 10,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          pointerEvents: "none"
+        }}
       >
-        <div style={{ maxWidth: "800px", margin: "0 auto", padding: "0 20px 12px", display: "flex", justifyContent: "flex-end" }}>
+        <div style={{ width: "100%", maxWidth: "800px", padding: "0 20px", display: "flex", justifyContent: "flex-end", marginBottom: "12px", pointerEvents: "auto" }}>
           <SearchToggle
             webSearchEnabled={webSearchEnabled}
             onToggle={() => setWebSearchEnabled((prev) => !prev)}
             disabled={isTyping}
           />
         </div>
-        <ChatInput onSend={sendMessage} disabled={isTyping} />
+        <div style={{ width: "100%", pointerEvents: "auto" }} className="animate-slide-up">
+          <ChatInput onSend={sendMessage} disabled={isTyping} />
+        </div>
       </div>
     </main>
   );

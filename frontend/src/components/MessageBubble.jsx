@@ -50,16 +50,18 @@ export default function MessageBubble({ message }) {
       }}
     >
       <div
-        className="animate-fade-in"
+        className="animate-fade-in-scale"
         style={{
-          backgroundColor: isUser ? "var(--bubble-user-bg)" : "var(--bubble-bot-bg)",
+          background: isUser ? "var(--bubble-user-bg)" : "var(--bubble-bot-bg)",
           color: isUser ? "var(--bubble-user-fg)" : "var(--bubble-bot-fg)",
-          padding: isUser ? "12px 20px" : "0px 0px",
-          borderRadius: isUser ? "20px 20px 4px 20px" : "16px",
+          padding: isUser ? "10px 18px" : "12px 16px",
+          borderRadius: isUser ? "20px 20px 4px 20px" : "4px 20px 20px 20px",
+          boxShadow: isUser ? "none" : "var(--bubble-bot-shadow)",
+          border: isUser ? "none" : "1px solid var(--border-light)",
           maxWidth: "85%",
           fontSize: "15.5px",
-          letterSpacing: "-0.1px",
-          lineHeight: 1.6,
+          letterSpacing: "-0.2px",
+          lineHeight: 1.5,
         }}
       >
         {!isUser && (
