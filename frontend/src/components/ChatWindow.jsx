@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import MessageBubble from "./MessageBubble";
 
-export default function ChatWindow({ messages, isTyping }) {
+export default function ChatWindow({ messages, isTyping, onOpenNickname }) {
   const bottomRef = useRef(null);
 
   useEffect(() => {
@@ -50,9 +50,30 @@ export default function ChatWindow({ messages, isTyping }) {
             >
               How can I help you shop today?
             </h2>
-            <p style={{ fontSize: "16px" }}>
+            <p style={{ fontSize: "16px", lineHeight: 1.7 }}>
               Search for products, ask for recommendations, or upload an image to
               find similar items.
+            </p>
+            <p style={{ fontSize: "14px", marginTop: "12px", color: "var(--muted-text)" }}>
+              <button
+                onClick={onOpenNickname}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--primary-accent)",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  fontSize: "14px",
+                  fontWeight: 500,
+                  padding: 0,
+                  textDecoration: "underline",
+                  textDecorationColor: "rgba(0, 113, 227, 0.3)",
+                  textUnderlineOffset: "3px",
+                }}
+              >
+                Set a nickname
+              </button>
+              {" "}to save your preferences across sessions.
             </p>
           </div>
         )}
@@ -74,3 +95,4 @@ export default function ChatWindow({ messages, isTyping }) {
     </div>
   );
 }
+

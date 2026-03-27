@@ -1,49 +1,63 @@
-import { NextResponse } from "next/server";
-
 /**
  * POST /api/feedback
  *
  * Receives user product feedback (upvote/downvote).
- * Upvoted web products are queued for async ingestion into the local catalog.
- *
- * Body:
- *   { product: { title, description, price, image, url, source }, vote: "up" | "down" }
- *
- * In production, this forwards to the Python agent server.
- * Currently mocks the response while logging the payload.
+ * Upvoted products are forwarded to the Python backend's /api/ingest endpoint.
  */
 export async function POST(req) {
+  const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
+
   try {
     const body = await req.json();
     const { product, vote } = body;
 
     console.log(`[Feedback] ${vote === "up" ? "👍" : "👎"} ${product?.title}`);
-    console.log(`[Feedback] Source: ${product?.source}, URL: ${product?.url}`);
 
-    // In production: forward to Python backend for async ingestion
-    // const backendUrl = process.env.AGENT_API_URL || "http://localhost:8000";
-    // if (vote === "up" && product?.source === "web") {
-    //   fetch(`${backendUrl}/api/ingest`, {
-    //     method: "POST",
-    //     headers: { "Content-Type": "application/json" },
-    //     body: JSON.stringify({ product_data: product }),
-    //   }).catch((err) => console.error("[Feedback] Backend ingest failed:", err));
-    // }
+    // Forward upvoted products to the backend for ingestion
+    if (vote === "up") {
+      try {
+        const ingestRes = await fetch(`${BACKEND_URL}/api/ingest`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ product_data: product }),
+        });
+        const ingestData = await ingestRes.json();
+        console.log(`[Feedback] Ingest result:`, ingestData);
 
-    return NextResponse.json({
-      success: true,
-      message:
-        vote === "up"
-          ? "Product queued for catalog ingestion"
-          : "Feedback recorded",
-      product_id: product?.id,
-      vote,
-    });
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: "Product ingested into catalog",
+            ingest: ingestData,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      } catch (err) {
+        console.error("[Feedback] Backend ingest failed:", err.message);
+        return new Response(
+          JSON.stringify({
+            success: false,
+            message: "Feedback recorded but ingest failed — is the backend running?",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // Downvote — just acknowledge
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: "Feedback recorded",
+        vote,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
   } catch (err) {
     console.error("[Feedback] Error:", err);
-    return NextResponse.json(
-      { error: "Failed to process feedback" },
-      { status: 500 }
+    return new Response(
+      JSON.stringify({ error: "Failed to process feedback" }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
 }

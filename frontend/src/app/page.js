@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import ChatWindow from "@/components/ChatWindow";
 import ChatInput from "@/components/ChatInput";
 import Header from "@/components/Header";
 import StatusPipeline from "@/components/StatusPipeline";
 import SearchToggle from "@/components/SearchToggle";
+import NicknameModal from "@/components/NicknameModal";
 
 export default function Home() {
   const [messages, setMessages] = useState([]);
@@ -13,6 +14,27 @@ export default function Home() {
   const [pipelineMsg, setPipelineMsg] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+
+  // Nickname state
+  const [nickname, setNickname] = useState("");
+  const [showNicknameModal, setShowNicknameModal] = useState(false);
+
+  // Load nickname from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem("commerce_nickname");
+    if (saved) setNickname(saved);
+  }, []);
+
+  const handleNicknameSave = (name, status) => {
+    if (name) {
+      setNickname(name);
+      localStorage.setItem("commerce_nickname", name);
+    } else {
+      // Cleared
+      setNickname("");
+      localStorage.removeItem("commerce_nickname");
+    }
+  };
 
   const sendMessage = async (text, image) => {
     const newMessage = { id: Date.now(), role: "user", content: text };
@@ -33,6 +55,7 @@ export default function Home() {
           message: text,
           hasImage: !!image,
           webSearch: webSearchEnabled,
+          user_id: nickname || "",  // Send nickname as user_id
         }),
       });
 
@@ -116,8 +139,15 @@ export default function Home() {
         height: "100vh",
       }}
     >
-      <Header />
-      <ChatWindow messages={messages} isTyping={isTyping} />
+      <Header
+        nickname={nickname}
+        onUserIconClick={() => setShowNicknameModal(true)}
+      />
+      <ChatWindow
+        messages={messages}
+        isTyping={isTyping}
+        onOpenNickname={() => setShowNicknameModal(true)}
+      />
       {pipelineStage && <StatusPipeline stage={pipelineStage} message={pipelineMsg} />}
       <div
         style={{
@@ -143,6 +173,14 @@ export default function Home() {
           <ChatInput onSend={sendMessage} disabled={isTyping} />
         </div>
       </div>
+
+      {/* Nickname Modal */}
+      <NicknameModal
+        isOpen={showNicknameModal}
+        onClose={() => setShowNicknameModal(false)}
+        onSave={handleNicknameSave}
+        currentNickname={nickname}
+      />
     </main>
   );
 }
