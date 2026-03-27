@@ -114,7 +114,6 @@ export default function Home() {
         display: "flex",
         flexDirection: "column",
         height: "100vh",
-        backgroundColor: "var(--background)",
       }}
     >
       <Header />
