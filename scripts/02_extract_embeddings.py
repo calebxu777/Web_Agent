@@ -47,9 +47,14 @@ def extract_visual_embeddings(
     embedder: DINOv2Embedder,
     batch_size: int = 64,
     limit: int | None = None,
+    force: bool = False,
 ):
     """Extract DINOv2 visual embeddings for all products with images."""
-    query = "SELECT product_id, image_urls FROM products WHERE has_visual_embedding = 0 AND image_urls != ''"
+    if force:
+        query = "SELECT product_id, image_urls FROM products WHERE image_urls != ''"
+    else:
+        query = "SELECT product_id, image_urls FROM products WHERE has_visual_embedding = 0 AND image_urls != ''"
+        
     if limit:
         query += f" LIMIT {limit}"
     rows = sqlite.conn.execute(query).fetchall()
@@ -171,6 +176,8 @@ def main():
                         help="Limit number of products to process (for testing)")
     parser.add_argument("--image-dir", type=str, default=None,
                         help="Override local image directory")
+    parser.add_argument("--force-visual", action="store_true",
+                        help="Force re-extraction of visual embeddings even if SQLite says they are already extracted")
     args = parser.parse_args()
 
     global LOCAL_IMAGE_DIR
@@ -209,7 +216,7 @@ def main():
             model_id=config["embeddings"]["visual"]["model_id"],
             batch_size=vbs,
         )
-        extract_visual_embeddings(sqlite, lancedb, visual_embedder, batch_size=vbs, limit=args.limit)
+        extract_visual_embeddings(sqlite, lancedb, visual_embedder, batch_size=vbs, limit=args.limit, force=args.force_visual)
 
         # Free GPU memory before loading next model
         del visual_embedder
