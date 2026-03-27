@@ -37,8 +37,12 @@ google-cloud-storage>=2.16.0
 # unsloth @ git+https://github.com/unslothai/unsloth.git
 # trl>=0.8.0
 
-# ---- Serving (optional — only needed for model inference) ----
-# sglang[all]>=0.2.0
+# ---- Serving (Required for local API Proxying) ----
+fastapi>=0.111.0
+uvicorn>=0.30.0
+
+# ---- Memory ----
+redis>=5.0.0
 
 # ---- Development ----
 numpy>=1.26.0

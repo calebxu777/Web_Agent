@@ -7,13 +7,17 @@
 # ----------------------------------------------------------
 models:
   handyman:
+    # MVP Config: Using plain base model for testing routing logic first
+    # Later: We will post-train this and use custom LoRAs
     model_id: "Qwen/Qwen3.5-0.8B"
     role: "Router & VLM Specialist"
     max_tokens: 512
     temperature: 0.3
 
   master_brain:
-    model_id: "Qwen/Qwen3.5-9B"
+    # MVP Config: Using the massive off-the-shelf 35B model
+    # for a powerful plug-and-play experience without our own fine-tuning.
+    model_id: "Qwen/Qwen3.5-35B-A3B-Instruct"
     role: "Voice & Reasoning Engine"
     max_tokens: 2048
     temperature: 0.7
