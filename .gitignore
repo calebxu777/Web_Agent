@@ -4,9 +4,16 @@
 data/raw/
 data/processed/images/
 data/processed/lancedb/
+data.tar.gz
+data/*.db
+data/embed_log*.txt
 
 # 66MB — stored on GCS instead
 data/processed/catalog.db
+
+# Evaluation results (generated locally)
+scripts/evaluation/results/
+scripts/evaluation/testing_prompts.jsonl
 
 # ====================
 # Models (downloaded / trained)
