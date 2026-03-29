@@ -2,6 +2,8 @@
 
 A compound AI commerce assistant built around a dual-model workflow, hybrid retrieval, and a lightweight evaluation-friendly serving setup. The MVP prioritizes fast iteration with a hosted API LLM for generation, while keeping the system ready to compare against cluster-hosted open-source models later.
 
+For the separate MVP backend path, refer to [mvp/README.md](mvp/README.md).
+
 ## Workflow
 
 ```text

@@ -1,0 +1,15 @@
+[MVP FastAPI] Starting Server...
+[MVP FastAPI] NicknameDB + IngestTestDB ready
+INFO:     127.0.0.1:56903 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60230 - "POST /api/chat HTTP/1.1" 200 OK
+
+============================================================
+  MVPCommerceAgent Cold Start
+  Master Brain:      gemini-2.5-flash
+  Router Model:      gemini-2.5-flash
+  API Base:          https://generativelanguage.googleapis.com/v1beta/openai/
+  Use Web Search:    False
+  Use Memory:        True
+============================================================
+
+[BGE-M3] Loading BAAI/bge-m3...

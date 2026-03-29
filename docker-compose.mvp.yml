@@ -1,0 +1,33 @@
+services:
+  mvp-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.mvp
+    container_name: commerce-mvp-backend
+    env_file:
+      - mvp/.env
+    ports:
+      - "8011:8011"
+    depends_on:
+      - redis
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+    gpus: all
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - huggingface-cache:/root/.cache/huggingface
+      - torch-cache:/root/.cache/torch
+
+  redis:
+    image: redis:7
+    container_name: commerce-mvp-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+volumes:
+  huggingface-cache:
+  torch-cache:
+  redis-data:

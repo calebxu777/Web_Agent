@@ -1,0 +1,3 @@
+[MVP FastAPI] Starting Server...
+[MVP FastAPI] NicknameDB + IngestTestDB ready
+INFO:     127.0.0.1:57093 - "POST /api/chat HTTP/1.1" 200 OK
