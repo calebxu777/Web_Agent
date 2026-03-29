@@ -92,6 +92,54 @@ All routes
 - **RadixAttention (KV Caching)**: cache product-description context on the GPU so follow-up turns can reuse prior context instead of recomputing it from scratch
 - **EAGLE-3 Speculative Decoding**: let the smaller Handyman model draft tokens for the larger Master Brain, while the Master Brain verifies them in parallel for significantly higher throughput without changing the final output quality
 
+## Datasets Used
+
+- **Amazon (2023/2024)**: the main commerce dataset for product titles, descriptions, technical specs, reviews, and Rufus-style product metadata
+- **H&M Fashion**: the main fashion-image dataset for higher-quality product photography and finer-grained visual search on texture, silhouette, and pattern
+
+Together, these datasets let the repo combine:
+
+- strong product metadata and reviews for reasoning-heavy text search
+- stronger fashion imagery for visual retrieval and image-based search
+
+## Data And Embedding Flow
+
+The main offline pipeline is:
+
+1. Download raw datasets
+2. Clean and enrich the raw product records
+3. Normalize products into a unified SQLite catalog
+4. Generate semantic embeddings with `BGE-M3`
+5. Generate visual embeddings with `DINOv2`
+6. Store vectors in LanceDB for retrieval
+
+The important scripts are:
+
+- `scripts/data_processing/00_download_raw_datasets.py`: download the raw Amazon and H&M source data
+- `scripts/data_processing/00_clean_and_enrich.py`: clean and enrich raw product records before indexing
+- `scripts/create_db/01_normalize_catalog.py`: build the canonical SQLite catalog
+- `scripts/create_db/02_extract_embeddings.py`: create semantic and visual embeddings and write them into LanceDB
+
+## Repo Guide
+
+### `scripts/`
+
+- `scripts/create_db/`: catalog normalization and embedding/index build steps
+- `scripts/data_processing/`: raw dataset download and preprocessing
+- `scripts/deploy/start_production.sh`: deployment helper for serving flows
+- `scripts/evaluation/`: question generation, evaluation runs, and quality reporting
+- `scripts/post_training/`: SFT, DPO, Handyman LoRA data generation, training, and quantization
+- `scripts/SGLang/`: launch helpers for cluster or post-training SGLang serving
+- `scripts/test/`: data checks and retrieval smoke tests, including mock SerpApi fixtures
+
+### `mvp/`
+
+- `mvp/api.py`: separate FastAPI entrypoint for the MVP backend
+- `mvp/agent.py`: MVP orchestration logic, retrieval fusion, product normalization, and streaming workflow
+- `mvp/router.py`: API-LLM intent detection, query decomposition, and reranking
+- `mvp/README.md`: MVP-specific setup and deployment notes
+- `mvp/.env.example`: example environment variables for API-provider MVP runs
+
 ## Project Structure
 
 - `config/` - central application configuration
