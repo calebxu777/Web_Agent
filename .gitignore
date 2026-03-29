@@ -53,6 +53,8 @@ venv/
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+mvp_server*.err.log
+mvp_server*.out.log
 
 # ====================
 # IDE
