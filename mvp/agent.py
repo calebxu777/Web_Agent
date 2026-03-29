@@ -276,6 +276,28 @@ class MVPCommerceAgent:
         item["merchant"] = item.get("merchant") or item.get("brand") or ""
         return item
 
+    def _sanitize_query(self, query):
+        if not self.sqlite:
+            return query
+
+        filters = dict(query.filters or {})
+        category = (filters.get("category") or "").strip()
+        if category:
+            known_categories = {
+                str(value).strip().lower()
+                for value in self.sqlite.get_all_categories()
+                if str(value).strip()
+            }
+            if category.lower() not in known_categories:
+                filters.pop("category", None)
+                tags = list(query.tags or [])
+                if category.lower() not in {tag.lower() for tag in tags}:
+                    tags.append(category)
+                query.tags = tags
+
+        query.filters = filters
+        return query
+
     def _fuse_ranked_product_lists(
         self,
         ranked_lists: list[tuple[str, list[dict]]],
@@ -500,6 +522,7 @@ class MVPCommerceAgent:
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.DECOMPOSING_QUERY)
         query = self.router.decompose_query(message)
+        query = self._sanitize_query(query)
         self._log_stage("decomposition", t0)
 
         t0 = time.time()
@@ -544,6 +567,20 @@ class MVPCommerceAgent:
 
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.GENERATING)
+        if not frontend_items:
+            no_results = (
+                "I couldn't find strong matches in the current catalog for that request. "
+                "Try broadening the category or removing one constraint like budget or product type."
+            )
+            yield json.dumps({"type": "token", "content": no_results})
+            self._log_stage("generation", t0)
+            if self.memory:
+                self.memory.on_assistant_message(
+                    session_id,
+                    ChatMessage(role="assistant", content=no_results, timestamp=time.time()),
+                )
+            return
+
         full_response = ""
         async for token in self.master_brain.synthesize_stream(message, frontend_items, chat_history, memory_context):
             full_response += token
