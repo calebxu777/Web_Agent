@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Frontend
 
-## Getting Started
+This is the Next.js frontend for the Commerce Agent MVP.
 
-First, run the development server:
+## Local Development
+
+From [`frontend/`](./):
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The app runs on `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+## Backend Connection
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The frontend proxies requests through Next.js API routes and expects:
 
-## Learn More
+```env
+BACKEND_URL=http://127.0.0.1:8011
+```
 
-To learn more about Next.js, take a look at the following resources:
+For local development, point `BACKEND_URL` at your local FastAPI backend.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Vercel Deployment
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Deploy this folder as a separate Vercel project with:
 
-## Deploy on Vercel
+- Framework Preset: `Next.js`
+- Root Directory: `frontend`
+- Environment Variable: `BACKEND_URL`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Example:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```env
+BACKEND_URL=http://YOUR_VM_PUBLIC_IP:8011
+```
+
+For the current MVP, the frontend talks to the GCP VM backend over the public backend URL. Later, this should move behind HTTPS on a domain rather than raw port `8011`.
+
+## API Routes
+
+The frontend includes proxy routes for:
+
+- `/api/chat`
+- `/api/nickname`
+- `/api/feedback`
+
+These routes forward requests to the FastAPI backend defined by `BACKEND_URL`.

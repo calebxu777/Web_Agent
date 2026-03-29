@@ -41,17 +41,37 @@ function ThumbButton({ type, active, onClick }) {
 }
 
 export default function ProductCard({ product }) {
-  const { title, price, description, image, source, url, merchant, rating, review_count: reviewCount } = product;
-  const [vote, setVote] = useState(null); // null | "up" | "down"
+  const {
+    title,
+    price,
+    description,
+    image,
+    image_urls: imageUrls,
+    source,
+    url,
+    merchant,
+    rating,
+    review_count: reviewCount,
+  } = product;
+
+  const [vote, setVote] = useState(null);
+  const [imageFailed, setImageFailed] = useState(false);
+
+  const imageSrc = (() => {
+    if (typeof image === "string" && image.trim()) return image.trim();
+    if (Array.isArray(imageUrls) && imageUrls.length > 0) return imageUrls[0];
+    if (typeof imageUrls === "string" && imageUrls.trim()) {
+      return imageUrls.split(",")[0].trim();
+    }
+    return "";
+  })();
 
   const handleVote = async (newVote) => {
-    // Toggle off if already selected
     const finalVote = vote === newVote ? null : newVote;
     setVote(finalVote);
 
-    if (!finalVote) return; // Toggled off, no API call
+    if (!finalVote) return;
 
-    // Fire-and-forget — don't block the UI
     try {
       fetch("/api/feedback", {
         method: "POST",
@@ -59,7 +79,7 @@ export default function ProductCard({ product }) {
         body: JSON.stringify({ product, vote: finalVote }),
       });
     } catch {
-      // Silent failure — don't disrupt UX
+      // Keep feedback fire-and-forget so the card stays responsive.
     }
   };
 
@@ -90,7 +110,6 @@ export default function ProductCard({ product }) {
         e.currentTarget.style.transform = "translateY(0) scale(1)";
       }}
     >
-      {/* Product Image */}
       <div
         style={{
           width: "96px",
@@ -105,9 +124,9 @@ export default function ProductCard({ product }) {
           boxShadow: "inset 0 0 0 1px rgba(0, 0, 0, 0.04)",
         }}
       >
-        {image ? (
+        {imageSrc && !imageFailed ? (
           <img
-            src={image}
+            src={imageSrc}
             alt={title}
             style={{
               width: "100%",
@@ -117,21 +136,13 @@ export default function ProductCard({ product }) {
             }}
             onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.08)")}
             onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
-            onError={(e) => {
-              e.target.style.display = "none";
-              e.target.parentNode.innerHTML = `
-                <div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:var(--muted-text);font-size:24px;">
-                  📦
-                </div>
-              `;
-            }}
+            onError={() => setImageFailed(true)}
           />
         ) : (
           <span style={{ fontSize: "28px" }}>📦</span>
         )}
       </div>
 
-      {/* Product Info */}
       <div
         style={{
           display: "flex",
@@ -142,7 +153,6 @@ export default function ProductCard({ product }) {
           minWidth: 0,
         }}
       >
-        {/* Title + Source Badge */}
         <div
           style={{
             display: "flex",
@@ -180,7 +190,6 @@ export default function ProductCard({ product }) {
           )}
         </div>
 
-        {/* Price */}
         {price != null && (
           <span
             style={{
@@ -214,7 +223,6 @@ export default function ProductCard({ product }) {
           </div>
         )}
 
-        {/* Description */}
         {description && (
           <p
             style={{
@@ -232,7 +240,6 @@ export default function ProductCard({ product }) {
           </p>
         )}
 
-        {/* Feedback Buttons */}
         <div
           style={{
             display: "flex",
