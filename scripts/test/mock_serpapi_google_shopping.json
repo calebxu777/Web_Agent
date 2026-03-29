@@ -1,0 +1,49 @@
+{
+  "shopping_results": [
+    {
+      "position": 1,
+      "title": "Sony WH-1000XM5 Wireless Noise-Canceling Headphones",
+      "product_id": "mock_1001",
+      "product_link": "https://www.google.com/shopping/product/mock_1001?gl=us",
+      "source": "Best Buy",
+      "price": "$329.99",
+      "extracted_price": 329.99,
+      "rating": 4.7,
+      "reviews": 8421,
+      "snippet": "Premium noise cancellation, long battery life, and comfortable fit.",
+      "extensions": ["Free shipping"],
+      "delivery": "Arrives tomorrow",
+      "thumbnail": "https://images.example.com/sony-wh1000xm5.jpg"
+    },
+    {
+      "position": 2,
+      "title": "Bose QuietComfort Ultra Headphones",
+      "product_id": "mock_1002",
+      "product_link": "https://www.google.com/shopping/product/mock_1002?gl=us",
+      "source": "Amazon",
+      "price": "$349.00",
+      "extracted_price": 349.0,
+      "rating": 4.6,
+      "reviews": 2987,
+      "snippet": "Immersive audio with soft ear cushions and strong ANC.",
+      "extensions": ["Prime eligible"],
+      "delivery": "Get it by Monday",
+      "thumbnail": "https://images.example.com/bose-qc-ultra.jpg"
+    },
+    {
+      "position": 3,
+      "title": "Anker Soundcore Space One",
+      "product_id": "mock_1003",
+      "product_link": "https://www.google.com/shopping/product/mock_1003?gl=us",
+      "source": "Walmart",
+      "price": "$99.99",
+      "extracted_price": 99.99,
+      "rating": 4.5,
+      "reviews": 1543,
+      "snippet": "Budget-friendly ANC headphones with strong battery life.",
+      "extensions": ["In store"],
+      "delivery": "Pickup today",
+      "thumbnail": "https://images.example.com/anker-space-one.jpg"
+    }
+  ]
+}

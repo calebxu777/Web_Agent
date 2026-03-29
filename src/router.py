@@ -65,9 +65,11 @@ class HandymanRouter:
     def __init__(
         self,
         api_base: str = "http://localhost:30000/v1",
+        api_key: str = "",
         timeout: float = 5.0,
     ):
         self.api_base = api_base.rstrip("/")
+        self.api_key = api_key
         self.timeout = timeout
         self.client = httpx.Client(timeout=timeout)
 
@@ -80,8 +82,13 @@ class HandymanRouter:
         max_tokens: int = 256,
     ) -> str:
         """Call the SGLang endpoint with a specific LoRA adapter."""
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
         response = self.client.post(
             f"{self.api_base}/chat/completions",
+            headers=headers,
             json={
                 "model": model or self.BASE_MODEL,
                 "messages": [

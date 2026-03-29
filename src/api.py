@@ -170,9 +170,24 @@ async def lifespan(app: FastAPI):
     ac = AgentConfig(
         master_brain_model_name=config["models"]["master_brain"]["model_id"],
         handyman_model_name=config["models"]["handyman"]["model_id"],
+        inference_backend=os.environ.get("AGENT_INFERENCE_BACKEND", "local"),
+        cluster_tunneled_handyman_api_base=os.environ.get("CLUSTER_TUNNELED_HANDYMAN_API_BASE", ""),
+        cluster_tunneled_master_brain_api_base=os.environ.get("CLUSTER_TUNNELED_MASTER_BRAIN_API_BASE", ""),
+        api_provider_handyman_api_base=os.environ.get("API_PROVIDER_HANDYMAN_API_BASE", ""),
+        api_provider_master_brain_api_base=os.environ.get("API_PROVIDER_MASTER_BRAIN_API_BASE", ""),
+        inference_api_key=os.environ.get("INFERENCE_API_KEY", ""),
         use_florence=False,
         use_visual_verifier=False,
-        use_web_search=False,
+        use_web_search=bool(
+            os.environ.get("SERPAPI_API_KEY", "").strip()
+            or os.environ.get("SERPAPI_MOCK_RESULTS_PATH", "").strip()
+        ),
+        serpapi_api_key=os.environ.get("SERPAPI_API_KEY", ""),
+        serpapi_api_base=os.environ.get("SERPAPI_API_BASE", "https://serpapi.com"),
+        serpapi_location=os.environ.get("SERPAPI_LOCATION", ""),
+        serpapi_gl=os.environ.get("SERPAPI_GL", "us"),
+        serpapi_hl=os.environ.get("SERPAPI_HL", "en"),
+        serpapi_mock_results_path=os.environ.get("SERPAPI_MOCK_RESULTS_PATH", ""),
         image_storage_provider=provider,
         local_image_base_path=local_path,
         log_timing=True,
@@ -298,7 +313,7 @@ async def ingest_product(req: IngestRequest):
     print(f"[Ingest] Received: {product.get('title', 'N/A')[:60]}")
 
     pid = ingest_db.insert(product)
-    print(f"[Ingest] ✅ Inserted as {pid}")
+    print(f"[Ingest] [ok] Inserted as {pid}")
 
     return JSONResponse({
         "status": "ingested",

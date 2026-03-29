@@ -1,186 +1,160 @@
 """
-web_search.py — Firecrawl Web Search Integration
+web_search.py - SerpApi Google Shopping integration
 ===================================================
-Searches the web for products using Firecrawl,
-extracts structured product data, embeds them,
-and returns candidates ready for RRF fusion with local results.
+Fetches structured shopping results from SerpApi and normalizes them into the
+same product-like shape used by the local catalog.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
-import re
 from typing import Optional
 
-import httpx
-import numpy as np
 
-from src.embeddings import BGEM3Embedder, DINOv2Embedder
-
-
-class FirecrawlSearcher:
-    """
-    Uses Firecrawl API to search the web and extract structured product data.
-
-    Flow:
-    1. Search query → Firecrawl search endpoint → result URLs
-    2. Firecrawl scrapes each URL → structured markdown/JSON
-    3. Parse product information (title, price, description, image URLs)
-    4. Embed products for hybrid search
-    """
+class SerpApiGoogleShoppingSearcher:
+    """Thin client for SerpApi Google Shopping results."""
 
     def __init__(
         self,
         api_key: str,
-        api_base: str = "https://api.firecrawl.dev/v1",
+        api_base: str = "https://serpapi.com",
+        location: str = "",
+        gl: str = "us",
+        hl: str = "en",
+        mock_results_path: str = "",
         timeout: float = 30.0,
     ):
         self.api_key = api_key
         self.api_base = api_base.rstrip("/")
-        self.client = httpx.Client(
-            timeout=timeout,
-            headers={"Authorization": f"Bearer {api_key}"},
-        )
+        self.location = location
+        self.gl = gl
+        self.hl = hl
+        self.mock_results_path = mock_results_path
+        self.client = None
+        self.timeout = timeout
 
     def search(self, query: str, num_results: int = 10) -> list[dict]:
-        """
-        Search the web and return structured results.
-        Firecrawl's /search endpoint handles both search and scraping.
-        """
+        """Return raw shopping results from SerpApi."""
+        if self.mock_results_path:
+            try:
+                with open(self.mock_results_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                results = data.get("shopping_results", []) or data.get("inline_shopping_results", [])
+                return results[:num_results]
+            except Exception as e:
+                print(f"[SerpApi Mock] Failed to load {self.mock_results_path}: {e}")
+                return []
+
+        params = {
+            "engine": "google_shopping",
+            "q": query,
+            "api_key": self.api_key,
+            "gl": self.gl,
+            "hl": self.hl,
+            "num": min(max(num_results, 1), 100),
+            "direct_link": "true",
+            "no_cache": "false",
+        }
+        if self.location:
+            params["location"] = self.location
+
         try:
-            response = self.client.post(
-                f"{self.api_base}/search",
-                json={
-                    "query": query,
-                    "limit": num_results,
-                    "scrapeOptions": {
-                        "formats": ["markdown"],
-                    },
-                },
-            )
+            if self.client is None:
+                import httpx
+
+                self.client = httpx.Client(timeout=self.timeout)
+            response = self.client.get(f"{self.api_base}/search.json", params=params)
             response.raise_for_status()
             data = response.json()
-            return data.get("data", [])
+            return data.get("shopping_results", []) or data.get("inline_shopping_results", [])
         except Exception as e:
-            print(f"[Firecrawl] Search failed: {e}")
+            print(f"[SerpApi] Search failed: {e}")
             return []
-
-    def scrape_url(self, url: str) -> dict | None:
-        """Scrape a single URL for product data."""
-        try:
-            response = self.client.post(
-                f"{self.api_base}/scrape",
-                json={
-                    "url": url,
-                    "formats": ["markdown"],
-                },
-            )
-            response.raise_for_status()
-            return response.json().get("data", {})
-        except Exception as e:
-            print(f"[Firecrawl] Scrape failed for {url}: {e}")
-            return None
 
 
 class WebProductExtractor:
-    """
-    Parses Firecrawl search results into structured product data
-    compatible with the local catalog format.
-    """
+    """Normalize SerpApi shopping results into the app's product shape."""
 
     @staticmethod
     def extract_products(search_results: list[dict]) -> list[dict]:
-        """
-        Extract product-like items from Firecrawl search results.
-        Each result has: url, title, description, markdown content.
-        """
         products = []
 
-        for i, result in enumerate(search_results):
-            title = result.get("title", "")
-            url = result.get("url", "")
-            description = result.get("description", "")
-            markdown = result.get("markdown", "")
+        for idx, result in enumerate(search_results):
+            title = result.get("title") or "Untitled"
+            product_url = result.get("product_link") or result.get("link") or ""
+            external_id = str(result.get("product_id") or result.get("position") or idx)
+            dedupe_seed = product_url or f"{title}|{external_id}"
+            product_id = f"web_{hashlib.sha256(dedupe_seed.encode('utf-8')).hexdigest()[:12]}"
 
-            # Try to extract price from content
-            price = WebProductExtractor._extract_price(markdown or description)
+            thumbnail = (
+                result.get("thumbnail")
+                or result.get("serpapi_thumbnail")
+                or ""
+            )
+            merchant = result.get("source", "")
+            price = result.get("extracted_price")
+            if price is None:
+                price = WebProductExtractor._coerce_price(result.get("price"))
 
-            # Try to extract image URLs from markdown
-            image_urls = WebProductExtractor._extract_images(markdown)
+            rating = result.get("rating")
+            review_count = result.get("reviews")
+            description_parts = []
+            if result.get("snippet"):
+                description_parts.append(result["snippet"])
+            if merchant:
+                description_parts.append(f"Merchant: {merchant}")
+            if result.get("delivery"):
+                description_parts.append(f"Delivery: {result['delivery']}")
+            if result.get("extensions"):
+                description_parts.append(" | ".join(result["extensions"]))
 
-            # Build a product-like dict compatible with local search results
             product = {
-                "product_id": f"web_{i}_{hash(url) % 100000}",
-                "title": title or "Untitled",
-                "description": description,
+                "product_id": product_id,
+                "external_id": external_id,
+                "title": title,
+                "description": " ".join(description_parts).strip(),
                 "price": price,
-                "brand": "",
+                "brand": merchant,
                 "category": "",
-                "image_urls": ",".join(image_urls[:3]),
+                "image": thumbnail,
+                "image_urls": thumbnail,
                 "source": "web",
-                "url": url,
+                "merchant": merchant,
+                "url": product_url,
+                "rating": rating,
+                "review_count": review_count or 0,
                 "in_stock": 1,
-                # Full markdown for the Master Brain to reference
-                "full_content": (markdown or description)[:2000],
+                "web_position": result.get("position", idx + 1),
             }
             products.append(product)
 
         return products
 
     @staticmethod
-    def _extract_price(text: str) -> float | None:
-        """Extract price from text using common patterns."""
-        patterns = [
-            r'\$(\d{1,5}(?:\.\d{2})?)',        # $99.99
-            r'USD\s*(\d{1,5}(?:\.\d{2})?)',     # USD 99.99
-            r'Price:\s*\$?(\d{1,5}(?:\.\d{2})?)', # Price: 99.99
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                try:
-                    return float(match.group(1))
-                except ValueError:
-                    continue
-        return None
+    def _coerce_price(raw_price) -> Optional[float]:
+        if raw_price is None:
+            return None
+        if isinstance(raw_price, (int, float)):
+            return float(raw_price)
 
-    @staticmethod
-    def _extract_images(markdown: str) -> list[str]:
-        """Extract image URLs from markdown content."""
-        # Match ![alt](url) pattern
-        pattern = r'!\[.*?\]\((https?://[^\s\)]+)\)'
-        urls = re.findall(pattern, markdown)
-        # Also match raw image URLs
-        img_pattern = r'(https?://\S+\.(?:jpg|jpeg|png|webp|gif))'
-        urls.extend(re.findall(img_pattern, markdown, re.IGNORECASE))
-        # Deduplicate
-        seen = set()
-        unique = []
-        for u in urls:
-            if u not in seen:
-                seen.add(u)
-                unique.append(u)
-        return unique
+        cleaned = str(raw_price).replace("$", "").replace(",", "").strip()
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
 
 
 class WebSearchPipeline:
     """
-    Full web search pipeline:
-    1. Firecrawl search → structured results
-    2. Extract products from results
-    3. Embed products (BGE-M3 text + optional DINOv2 visual)
-    4. Return candidates ready for RRF fusion with local results
+    Structured web search pipeline:
+    1. Search SerpApi Google Shopping
+    2. Normalize results to product-like records
+    3. Return a ranked candidate list for later fusion
     """
 
-    def __init__(
-        self,
-        firecrawl: FirecrawlSearcher,
-        semantic_embedder: BGEM3Embedder,
-        visual_embedder: Optional[DINOv2Embedder] = None,
-    ):
-        self.firecrawl = firecrawl
-        self.semantic_embedder = semantic_embedder
-        self.visual_embedder = visual_embedder
+    def __init__(self, searcher: SerpApiGoogleShoppingSearcher):
+        self.searcher = searcher
         self.extractor = WebProductExtractor()
 
     def search(
@@ -189,50 +163,8 @@ class WebSearchPipeline:
         num_results: int = 10,
         include_visual: bool = False,
     ) -> dict:
-        """
-        Run the full web search pipeline.
+        del include_visual  # Present for API compatibility with the agent.
 
-        Returns:
-            dict with 'products' (list), 'text_embeddings' (np.ndarray),
-            and optionally 'visual_embeddings' (np.ndarray)
-        """
-        # Step 1: Firecrawl search
-        raw_results = self.firecrawl.search(query, num_results=num_results)
-
-        if not raw_results:
-            return {"products": [], "text_embeddings": None, "visual_embeddings": None}
-
-        # Step 2: Extract products
+        raw_results = self.searcher.search(query, num_results=num_results)
         products = self.extractor.extract_products(raw_results)
-
-        if not products:
-            return {"products": [], "text_embeddings": None, "visual_embeddings": None}
-
-        # Step 3: Embed text (title + description)
-        texts = [
-            f"{p['title']} | {p['description'][:300]}"
-            for p in products
-        ]
-        text_result = self.semantic_embedder.embed_batch(texts, show_progress=False)
-        text_embeddings = text_result["dense"]
-
-        # Step 4: Optionally embed images
-        visual_embeddings = None
-        if include_visual and self.visual_embedder:
-            image_urls = []
-            for p in products:
-                urls = p.get("image_urls", "").split(",")
-                image_urls.append(urls[0].strip() if urls and urls[0].strip() else "")
-
-            # Only embed products that have images
-            valid_urls = [u for u in image_urls if u]
-            if valid_urls:
-                visual_embeddings = self.visual_embedder.embed_batch(
-                    valid_urls, show_progress=False
-                )
-
-        return {
-            "products": products,
-            "text_embeddings": text_embeddings,
-            "visual_embeddings": visual_embeddings,
-        }
+        return {"products": products}

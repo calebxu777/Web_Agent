@@ -41,7 +41,7 @@ function ThumbButton({ type, active, onClick }) {
 }
 
 export default function ProductCard({ product }) {
-  const { title, price, description, image, source, url } = product;
+  const { title, price, description, image, source, url, merchant, rating, review_count: reviewCount } = product;
   const [vote, setVote] = useState(null); // null | "up" | "down"
 
   const handleVote = async (newVote) => {
@@ -192,6 +192,26 @@ export default function ProductCard({ product }) {
           >
             ${typeof price === "number" ? price.toFixed(2) : price}
           </span>
+        )}
+
+        {(merchant || rating) && (
+          <div
+            style={{
+              display: "flex",
+              gap: "8px",
+              alignItems: "center",
+              flexWrap: "wrap",
+              fontSize: "11.5px",
+              color: "var(--muted-text)",
+            }}
+          >
+            {merchant && <span>{merchant}</span>}
+            {rating && (
+              <span>
+                {rating}/5{reviewCount ? ` (${reviewCount})` : ""}
+              </span>
+            )}
+          </div>
         )}
 
         {/* Description */}

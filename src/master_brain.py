@@ -75,13 +75,21 @@ class MasterBrain:
         self,
         api_base: str = "http://localhost:30001/v1",
         model_name: str = "master_brain",
+        api_key: str = "",
         timeout: float = 30.0,
     ):
         self.api_base = api_base.rstrip("/")
         self.model_name = model_name
+        self.api_key = api_key
         self.timeout = timeout
         self.client = httpx.Client(timeout=timeout)
         self.async_client = httpx.AsyncClient(timeout=timeout)
+
+    def _request_headers(self) -> dict:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
 
     def _build_messages(
         self,
@@ -156,6 +164,7 @@ class MasterBrain:
 
         response = self.client.post(
             f"{self.api_base}/chat/completions",
+            headers=self._request_headers(),
             json={
                 "model": self.model_name,
                 "messages": messages,
@@ -185,6 +194,7 @@ class MasterBrain:
         async with self.async_client.stream(
             "POST",
             f"{self.api_base}/chat/completions",
+            headers=self._request_headers(),
             json={
                 "model": self.model_name,
                 "messages": messages,
@@ -227,6 +237,7 @@ class MasterBrain:
 
         response = self.client.post(
             f"{self.api_base}/chat/completions",
+            headers=self._request_headers(),
             json={
                 "model": self.model_name,
                 "messages": messages,
@@ -258,6 +269,7 @@ class MasterBrain:
         async with self.async_client.stream(
             "POST",
             f"{self.api_base}/chat/completions",
+            headers=self._request_headers(),
             json={
                 "model": self.model_name,
                 "messages": messages,
@@ -296,6 +308,7 @@ class MasterBrain:
 
         response = self.client.post(
             f"{self.api_base}/chat/completions",
+            headers=self._request_headers(),
             json={
                 "model": self.model_name,
                 "messages": [

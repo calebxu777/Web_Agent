@@ -11,7 +11,7 @@ The CommerceAgent ties everything together:
 Experiment Switches:
   AgentConfig controls all toggleable features for A/B testing:
     - use_florence: use Florence-2 for image captioning vs Handyman VLM
-    - use_web_search: enable Firecrawl web search pipeline
+    - use_web_search: enable SerpApi-backed web product search
     - use_visual_verifier: enable LoRA-Verifier for image match filtering
     - master_brain_model_name: swap different models as the synthesis engine
     - handyman_model_name: swap router model
@@ -62,6 +62,23 @@ class AgentConfig:
     # LoRA adapters are selected per-task automatically.
     handyman_model_name: str = "handyman"
 
+    # ---- Inference Backend Switch ----
+    # "local":             use localhost SGLang ports from config/settings.yaml
+    # "cluster-tunneled":  use SSH-tunneled OpenAI-compatible endpoints for evals
+    # "api-provider":      use an external OpenAI-compatible API backend
+    inference_backend: str = "local"
+
+    # Optional endpoint overrides for each backend mode.
+    local_handyman_api_base: str = ""
+    local_master_brain_api_base: str = ""
+    cluster_tunneled_handyman_api_base: str = ""
+    cluster_tunneled_master_brain_api_base: str = ""
+    api_provider_handyman_api_base: str = ""
+    api_provider_master_brain_api_base: str = ""
+
+    # Optional bearer token for external OpenAI-compatible providers.
+    inference_api_key: str = ""
+
     # ---- Florence-2 Toggle ----
     # True:  Use Florence-2 for image captioning (fine-grained tags).
     # False: Use Handyman VLM for captioning (fewer attributes, one fewer model).
@@ -71,13 +88,17 @@ class AgentConfig:
     florence_model_id: str = "microsoft/Florence-2-base"
 
     # ---- Web Search Toggle ----
-    # True: enable Firecrawl web search pipeline
+    # True: enable SerpApi-backed web product search
     # False: local catalog search only (even when frontend toggle is ON)
     use_web_search: bool = True
 
-    # Firecrawl API key (only used if use_web_search=True)
-    firecrawl_api_key: str = ""
-    firecrawl_api_base: str = "https://api.firecrawl.dev/v1"
+    # SerpApi Google Shopping settings (only used if use_web_search=True)
+    serpapi_api_key: str = ""
+    serpapi_api_base: str = "https://serpapi.com"
+    serpapi_location: str = ""
+    serpapi_gl: str = "us"
+    serpapi_hl: str = "en"
+    serpapi_mock_results_path: str = ""
 
     # ---- Visual Verifier Toggle ----
     # True:  After image search, use Handyman LoRA-Verifier to filter mismatches.
@@ -109,7 +130,7 @@ class AgentConfig:
     # ---- Image & Data Storage ----
     # "local": serve from local disk (fast, for local demo / recording)
     # "gcs":   serve from Google Cloud Storage publicly (industry standard, for Vercel deployment)
-    image_storage_provider: str = "local"
+    image_storage_provider: str = "gcs"
 
     # Local: base path for product images
     local_image_base_path: str = r"C:\Users\Caleb\Desktop\product_images"
@@ -149,6 +170,7 @@ class AgentConfig:
         """Export the config as a dict for benchmark logging."""
         return {
             "master_brain": self.master_brain_model_name,
+            "inference_backend": self.inference_backend,
             "use_florence": self.use_florence,
             "use_web_search": self.use_web_search,
             "use_visual_verifier": self.use_visual_verifier,
@@ -174,7 +196,7 @@ class PipelineStage:
     ANALYZING_IMAGE = ("analyzing_image", "Analyzing your image...")
     DECOMPOSING_QUERY = ("decomposing_query", "Breaking down your query...")
     SOURCING_LOCAL = ("sourcing_local", "Sourcing matches from catalog...")
-    SOURCING_WEB = ("sourcing_web", "Searching the web via Firecrawl...")
+    SOURCING_WEB = ("sourcing_web", "Searching the web via Google Shopping...")
     EXTRACTING_WEB = ("extracting_web", "Extracting product data from web results...")
     APPLYING_FILTERS = ("applying_filters", "Applying your preferences...")
     RERANKING = ("reranking", "Ranking products by relevance...")
@@ -200,7 +222,7 @@ class CommerceAgent:
     1. General Conversation → Handyman detects intent → Master Brain responds
     2. Text-Based Search   → Decompose → BGE-M3 retrieve → Rerank → Synthesize
     3. Image-Based Search  → Florence-2 / Handyman VLM tag → DINOv2+BGE-M3 → Verify → Synthesize
-    4. Web Search          → Firecrawl → embed → RRF merge with local → Rerank → Synthesize
+    4. Web Search          → Google Shopping → ranked fusion with local → Rerank → Synthesize
     """
 
     def __init__(self, config: dict, agent_config: AgentConfig | None = None):
@@ -227,7 +249,76 @@ class CommerceAgent:
         elapsed = time.time() - start
         self._stage_times[name] = elapsed
         if self.ac.log_timing:
-            print(f"  ⏱  {name}: {elapsed:.3f}s")
+            print(f"  [timing] {name}: {elapsed:.3f}s")
+
+    def _resolve_inference_endpoints(self) -> tuple[str, str]:
+        """Resolve Handyman and Master Brain API bases for the selected backend."""
+        sglang_cfg = self.config["inference"]["sglang"]
+        local_handyman = (
+            self.ac.local_handyman_api_base
+            or f"http://localhost:{sglang_cfg['handyman_port']}/v1"
+        )
+        local_master = (
+            self.ac.local_master_brain_api_base
+            or f"http://localhost:{sglang_cfg['master_brain_port']}/v1"
+        )
+
+        backends = {
+            "local": (local_handyman, local_master),
+            "cluster-tunneled": (
+                self.ac.cluster_tunneled_handyman_api_base or local_handyman,
+                self.ac.cluster_tunneled_master_brain_api_base or local_master,
+            ),
+            "api-provider": (
+                self.ac.api_provider_handyman_api_base or local_handyman,
+                self.ac.api_provider_master_brain_api_base or local_master,
+            ),
+        }
+
+        try:
+            return backends[self.ac.inference_backend]
+        except KeyError as exc:
+            raise ValueError(
+                f"Unsupported inference_backend={self.ac.inference_backend!r}. "
+                "Expected 'local', 'cluster-tunneled', or 'api-provider'."
+            ) from exc
+
+    def _fuse_ranked_product_lists(
+        self,
+        ranked_lists: list[tuple[str, list[dict]]],
+        limit: int,
+    ) -> list[dict]:
+        """
+        Fuse independently ranked local/web result sets with RRF-style scoring
+        instead of concatenating lists.
+        """
+        scored_products: dict[str, dict] = {}
+        scores: dict[str, float] = {}
+
+        for source_name, products in ranked_lists:
+            for rank, product in enumerate(products):
+                key = (
+                    product.get("product_id")
+                    or product.get("url")
+                    or f"{source_name}:{product.get('title', '')}:{rank}"
+                )
+                score = 1.0 / (self.ac.rrf_k + rank + 1)
+                scores[key] = scores.get(key, 0.0) + score
+
+                merged = dict(product)
+                merged["source"] = merged.get("source") or source_name
+                merged["retrieval_score"] = round(scores[key], 6)
+                scored_products[key] = merged
+
+        source_priority = {"local": 0, "web": 1}
+        ordered = sorted(
+            scored_products.values(),
+            key=lambda item: (
+                -item.get("retrieval_score", 0.0),
+                source_priority.get(item.get("source", "web"), 99),
+            ),
+        )
+        return ordered[:limit]
 
     def initialize(self):
         """
@@ -243,6 +334,7 @@ class CommerceAgent:
         print(f"\n{'='*60}")
         print(f"  CommerceAgent Cold Start")
         print(f"  Master Brain:      {ac.master_brain_model_name}")
+        print(f"  Inference Backend: {ac.inference_backend}")
         print(f"  Use Florence:      {ac.use_florence}")
         print(f"  Use Web Search:    {ac.use_web_search}")
         print(f"  Use Verifier:      {ac.use_visual_verifier}")
@@ -263,7 +355,7 @@ class CommerceAgent:
         )
         from src.retrieval import HybridRetriever
         from src.router import HandymanRouter
-        from src.web_search import FirecrawlSearcher, WebSearchPipeline
+        from src.web_search import SerpApiGoogleShoppingSearcher, WebSearchPipeline
 
         # --- Databases ---
         self.sqlite = SQLiteCatalog(cfg["databases"]["sqlite"]["path"])
@@ -295,14 +387,18 @@ class CommerceAgent:
             print("  Skipping Florence-2 (use_florence=False, Handyman VLM will caption)")
             self.florence_tagger = None
 
-        # --- SGLang Model Endpoints ---
-        sglang_cfg = cfg["inference"]["sglang"]
+        # --- OpenAI-compatible Model Endpoints ---
+        handyman_api_base, master_brain_api_base = self._resolve_inference_endpoints()
+        print(f"  Handyman API:      {handyman_api_base}")
+        print(f"  Master Brain API:  {master_brain_api_base}")
         self.handyman = HandymanRouter(
-            api_base=f"http://localhost:{sglang_cfg['handyman_port']}/v1",
+            api_base=handyman_api_base,
+            api_key=ac.inference_api_key,
         )
         self.master_brain = MasterBrain(
-            api_base=f"http://localhost:{sglang_cfg['master_brain_port']}/v1",
+            api_base=master_brain_api_base,
             model_name=ac.master_brain_model_name,
+            api_key=ac.inference_api_key,
         )
 
         # --- Retrieval ---
@@ -326,21 +422,26 @@ class CommerceAgent:
         )
 
         # --- Web Search Pipeline (conditional) ---
-        if ac.use_web_search and ac.firecrawl_api_key:
-            firecrawl = FirecrawlSearcher(
-                api_key=ac.firecrawl_api_key,
-                api_base=ac.firecrawl_api_base,
+        if ac.use_web_search and (ac.serpapi_api_key or ac.serpapi_mock_results_path):
+            searcher = SerpApiGoogleShoppingSearcher(
+                api_key=ac.serpapi_api_key,
+                api_base=ac.serpapi_api_base,
+                location=ac.serpapi_location,
+                gl=ac.serpapi_gl,
+                hl=ac.serpapi_hl,
+                mock_results_path=ac.serpapi_mock_results_path,
             )
             self.web_pipeline = WebSearchPipeline(
-                firecrawl=firecrawl,
-                semantic_embedder=self.semantic_embedder,
-                visual_embedder=self.visual_embedder,
+                searcher=searcher,
             )
-            print("  Web search pipeline enabled (Firecrawl)")
+            if ac.serpapi_mock_results_path:
+                print(f"  Web search pipeline enabled (SerpApi mock: {ac.serpapi_mock_results_path})")
+            else:
+                print("  Web search pipeline enabled (SerpApi Google Shopping)")
         else:
             self.web_pipeline = None
-            if ac.use_web_search and not ac.firecrawl_api_key:
-                print("  ⚠️  Web search enabled but no API key — web search disabled")
+            if ac.use_web_search and not (ac.serpapi_api_key or ac.serpapi_mock_results_path):
+                print("  [warn] Web search enabled but no API key - web search disabled")
             else:
                 print("  Web search pipeline disabled")
 
@@ -369,7 +470,7 @@ class CommerceAgent:
             print("  Memory disabled (stateless mode)")
 
         self._initialized = True
-        print("\n✅ CommerceAgent initialized.\n")
+        print("\n[ok] CommerceAgent initialized.\n")
 
     # ================================================================
     # Main Entry Point
@@ -515,11 +616,16 @@ class CommerceAgent:
                 p["source"] = "web"
             self._log_stage("web_retrieval", t0)
 
-        # Merge and rerank the combined candidate pool
+        # Fuse the independent local and web ranked lists, then rerank.
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.RERANKING)
-        combined = local_products + web_products
-        reranked = self.handyman.rerank(message, combined, top_k=self.ac.top_k_final)
+        fused_candidates = self._fuse_ranked_product_lists(
+            [("local", local_products), ("web", web_products)],
+            limit=max(self.ac.top_k_reranked, self.ac.top_k_final * 3),
+        )
+        reranked = self.handyman.rerank(
+            message, fused_candidates, top_k=self.ac.top_k_final
+        )
         self._log_stage("reranking", t0)
 
         # Memory context
@@ -627,8 +733,11 @@ class CommerceAgent:
                 p["source"] = "web"
             self._log_stage("web_image_retrieval", t0)
 
-        # Merge local + web
-        combined = products + web_products
+        # Fuse local and web ranked lists before any final rerank.
+        combined = self._fuse_ranked_product_lists(
+            [("local", products), ("web", web_products)],
+            limit=max(self.ac.top_k_reranked, self.ac.top_k_final * 3),
+        )
 
         # Visual Verifier (conditional)
         if self.ac.use_visual_verifier and image_bytes:

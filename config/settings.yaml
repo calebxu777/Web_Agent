@@ -70,7 +70,7 @@ databases:
 # ----------------------------------------------------------
 image_storage:
   # "local" for development/demo, "gcs" for production/Vercel deployment
-  provider: "local"
+  provider: "gcs"
 
   local:
     base_path: "C:\\Users\\Caleb\\Desktop\\product_images"
