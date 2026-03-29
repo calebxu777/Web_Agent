@@ -30,6 +30,7 @@ Start by copying [`mvp/.env.example`](.env.example) to `mvp/.env` and filling in
 - `SERPAPI_API_KEY`
 - `SERPAPI_MOCK_RESULTS_PATH` for mock web-search testing
 - `SERPAPI_LOCATION`, `SERPAPI_GL`, `SERPAPI_HL` (optional)
+- `MVP_WEB_NUM_RESULTS` (optional, default: `1`)
 - `MVP_USE_MEMORY` (optional, default: `true`)
 - `MVP_GCS_CATALOG_DB_URL` (optional, defaults to the GCS `catalog.db` path)
 - `MVP_GCS_LANCEDB_PUBLIC_PREFIX` (optional, defaults to the public `data/processed/lancedb/` prefix in the same bucket)

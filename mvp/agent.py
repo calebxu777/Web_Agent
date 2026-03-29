@@ -44,6 +44,7 @@ class MVPConfig:
     serpapi_gl: str = "us"
     serpapi_hl: str = "en"
     serpapi_mock_results_path: str = ""
+    web_num_results: int = 1
 
     top_k_initial: int = 50
     top_k_reranked: int = 10
@@ -617,7 +618,7 @@ class MVPCommerceAgent:
             yield PipelineStage.to_sse(PipelineStage.SOURCING_WEB)
             web_result = self.web_pipeline.search(
                 query=query.rewritten_query or message,
-                num_results=self.ac.top_k_initial,
+                num_results=self.ac.web_num_results,
             )
             web_products = web_result["products"]
             for product in web_products:
@@ -741,7 +742,11 @@ class MVPCommerceAgent:
         if include_web and self.web_pipeline and caption:
             t0 = time.time()
             yield PipelineStage.to_sse(PipelineStage.SOURCING_WEB)
-            web_result = self.web_pipeline.search(query=caption, num_results=self.ac.top_k_initial, include_visual=True)
+            web_result = self.web_pipeline.search(
+                query=caption,
+                num_results=self.ac.web_num_results,
+                include_visual=True,
+            )
             web_products = web_result["products"]
             for product in web_products:
                 product["source"] = "web"

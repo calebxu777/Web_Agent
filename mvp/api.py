@@ -190,6 +190,7 @@ async def lifespan(app: FastAPI):
         serpapi_gl=os.environ.get("SERPAPI_GL", "us"),
         serpapi_hl=os.environ.get("SERPAPI_HL", "en"),
         serpapi_mock_results_path=os.environ.get("SERPAPI_MOCK_RESULTS_PATH", ""),
+        web_num_results=max(1, int(os.environ.get("MVP_WEB_NUM_RESULTS", "1"))),
         use_memory=os.environ.get("MVP_USE_MEMORY", "true").lower() not in {"0", "false", "no"},
         image_storage_provider="gcs",
         gcs_public_url=gcs_public_url,
