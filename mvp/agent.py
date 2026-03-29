@@ -265,10 +265,13 @@ class MVPCommerceAgent:
 
     def _normalize_product(self, product: dict) -> dict:
         item = dict(product)
+        explicit_image = str(item.get("image", "") or "").strip()
         raw_images = item.get("image_urls", "")
         first_image = ""
 
-        if isinstance(raw_images, list):
+        if explicit_image:
+            first_image = explicit_image
+        elif isinstance(raw_images, list):
             first_image = raw_images[0] if raw_images else ""
         elif isinstance(raw_images, str):
             first_image = raw_images.split(",")[0].strip() if raw_images else ""

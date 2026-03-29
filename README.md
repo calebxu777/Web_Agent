@@ -119,6 +119,24 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000)
 
+## Testing
+
+You can run lightweight offline tests without starting the backend server.
+
+These tests cover core MVP behavior such as:
+
+- general-talk, text-search, and image-search route detection
+- local product image normalization
+- local category-filter sanitizing
+- keyword-based ranking boosts
+- web-result cap configuration
+
+Run them from the repo root:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
+
 ## Backend Modes
 
 - **Local / Mock**: local FastAPI app, local retrieval, mock SerpApi results for safe testing
