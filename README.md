@@ -8,6 +8,15 @@ Frontend setup and deployment notes: [frontend/README.md](frontend/README.md)
 
 For the separate MVP backend path, refer to [mvp/README.md](mvp/README.md).
 
+## What It Offers
+
+- Visit the live frontend: [web-agent-pi.vercel.app](https://web-agent-pi.vercel.app/)
+- Ask general shopping or product-related questions in chat
+- Run text-based product search
+- Run image-based product search by uploading a product photo
+- Toggle between local catalog search and local + web search
+- Set a nickname so the system can remember your preferences across sessions
+
 ## Workflow
 
 ```text
