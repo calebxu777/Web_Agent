@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import tempfile
 import time
 import xml.etree.ElementTree as ET
@@ -326,6 +327,84 @@ class MVPCommerceAgent:
         )
         return ordered[:limit]
 
+    @staticmethod
+    def _tokenize_keywords(text: str) -> list[str]:
+        return [token for token in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(token) > 2]
+
+    def _apply_keyword_type_boosts(self, query_text: str, products: list[dict], limit: int) -> list[dict]:
+        if not products:
+            return products
+
+        keyword_candidates = {
+            token
+            for token in self._tokenize_keywords(query_text)
+            if token in {
+                "jacket",
+                "jackets",
+                "coat",
+                "coats",
+                "blazer",
+                "blazers",
+                "shacket",
+                "shackets",
+                "parka",
+                "parkas",
+                "hoodie",
+                "hoodies",
+                "windbreaker",
+                "windbreakers",
+                "bomber",
+                "bombers",
+                "shirt",
+                "shirts",
+                "dress",
+                "dresses",
+                "shoe",
+                "shoes",
+                "sneaker",
+                "sneakers",
+                "bag",
+                "bags",
+                "boot",
+                "boots",
+            }
+        }
+        if not keyword_candidates:
+            return products[:limit]
+
+        boosted = []
+        for product in products:
+            title = (product.get("title") or "").lower()
+            subcategory = (product.get("subcategory") or "").lower()
+            category = (product.get("category") or "").lower()
+            combined = " ".join([title, subcategory, category])
+
+            boost = 0.0
+            for keyword in keyword_candidates:
+                singular = keyword[:-1] if keyword.endswith("s") else keyword
+                variants = {keyword, singular}
+                if any(variant and variant in title for variant in variants):
+                    boost += 3.0
+                if any(variant and variant in subcategory for variant in variants):
+                    boost += 2.0
+                if any(variant and variant in category for variant in variants):
+                    boost += 0.5
+
+            # Mild penalty for obvious misses when a strong product type is requested.
+            if boost == 0.0 and any(
+                marker in combined
+                for marker in ["cap", "hat", "skirt", "dress", "sandal", "bag", "shirt"]
+            ):
+                boost -= 1.0
+
+            updated = dict(product)
+            updated["keyword_boost"] = boost
+            updated["ranking_score"] = updated.get("retrieval_score", 0.0) + boost
+            boosted.append(updated)
+
+        boosted.sort(key=lambda item: item.get("ranking_score", 0.0), reverse=True)
+        return boosted[:limit]
+
     def initialize(self):
         if self._initialized:
             return
@@ -551,6 +630,11 @@ class MVPCommerceAgent:
             [("local", local_products), ("web", web_products)],
             limit=max(self.ac.top_k_reranked, self.ac.top_k_final * 3),
         )
+        fused_candidates = self._apply_keyword_type_boosts(
+            query.rewritten_query or message,
+            fused_candidates,
+            limit=max(self.ac.top_k_reranked, self.ac.top_k_final * 3),
+        )
         reranked = self.router.rerank(message, fused_candidates, top_k=self.ac.top_k_final)
         self._log_stage("reranking", t0)
 
@@ -665,6 +749,11 @@ class MVPCommerceAgent:
 
         combined = self._fuse_ranked_product_lists(
             [("local", products), ("web", web_products)],
+            limit=max(self.ac.top_k_reranked, self.ac.top_k_final * 3),
+        )
+        combined = self._apply_keyword_type_boosts(
+            caption or message,
+            combined,
             limit=max(self.ac.top_k_reranked, self.ac.top_k_final * 3),
         )
 
