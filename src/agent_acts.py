@@ -103,20 +103,28 @@ class RecommendAct(AgentAct):
     ranked_products: list[dict] = field(default_factory=list)
     user_query: str = ""
     max_recommendations: int = 3
+    total_candidates: int = 0
     reasoning_style: str = "conversational"
     highlight_tradeoffs: bool = True
     suggest_alternatives: bool = True
 
     def to_prompt_block(self) -> str:
+        total_candidates = self.total_candidates or len(self.ranked_products)
         lines = [
             f"[RECOMMEND] Select the best {self.max_recommendations} products for the user.",
             f'User\'s request: "{self.user_query}"',
+            f"Total surfaced matches in [REPORT]: {total_candidates}",
             f"Style: {self.reasoning_style}",
         ]
         if self.highlight_tradeoffs:
             lines.append("Include honest trade-offs for each recommendation.")
         if self.suggest_alternatives:
             lines.append("If appropriate, suggest alternatives from the catalog.")
+        if total_candidates > self.max_recommendations:
+            lines.append(
+                f"If you only highlight a subset, first acknowledge the broader result set naturally, for example: "
+                f"\"I found {total_candidates} strong matches, and among them I'd especially recommend...\""
+            )
         lines.append("")
         lines.append("You may ONLY recommend products from the [REPORT] section above.")
         lines.append("Do NOT invent products, prices, or features not listed above.")
@@ -227,6 +235,7 @@ class ActBuilder:
                   alternatives: bool = True) -> "ActBuilder":
         self._acts.append(RecommendAct(
             ranked_products=products, user_query=query, max_recommendations=max_recs,
+            total_candidates=len(products),
             reasoning_style=style, highlight_tradeoffs=tradeoffs,
             suggest_alternatives=alternatives,
         ))

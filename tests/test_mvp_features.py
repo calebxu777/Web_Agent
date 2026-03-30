@@ -9,6 +9,8 @@ from mvp.api import resolve_env_flag, resolve_mvp_act_mode
 from mvp.preference_models import TurnAnalysisResult
 from mvp.router import MVPRouter
 from mvp.worksheet_store import InMemoryWorksheetStore
+from src.agent_acts import RecommendAct
+from src.master_brain import MasterBrain
 from src.schema import DecomposedQuery, IntentType
 
 
@@ -873,6 +875,43 @@ class MVPFeatureTests(unittest.TestCase):
         self.assertTrue(product_events)
         self.assertEqual(agent.router.last_top_k, 6)
         self.assertEqual(product_events[-1]["items"][0]["product_id"], "p6")
+
+    def test_recommend_act_acknowledges_total_surface_count_when_subset_is_recommended(self):
+        prompt = RecommendAct(
+            ranked_products=[
+                {"product_id": "p1", "title": "Item 1"},
+                {"product_id": "p2", "title": "Item 2"},
+                {"product_id": "p3", "title": "Item 3"},
+                {"product_id": "p4", "title": "Item 4"},
+                {"product_id": "p5", "title": "Item 5"},
+            ],
+            user_query="recommend some hoodies",
+            max_recommendations=2,
+            total_candidates=5,
+        ).to_prompt_block()
+
+        self.assertIn("Total surfaced matches in [REPORT]: 5", prompt)
+        self.assertIn("I found 5 strong matches", prompt)
+
+    def test_master_brain_prompt_mentions_total_surfaced_matches(self):
+        brain = MasterBrain(api_base="http://localhost:1", model_name="test-model")
+        try:
+            messages = brain._build_messages(
+                user_query="recommend some hoodies",
+                products=[
+                    {"product_id": "p1", "title": "Item 1"},
+                    {"product_id": "p2", "title": "Item 2"},
+                    {"product_id": "p3", "title": "Item 3"},
+                    {"product_id": "p4", "title": "Item 4"},
+                    {"product_id": "p5", "title": "Item 5"},
+                ],
+                chat_history=[],
+            )
+        finally:
+            brain.close()
+
+        self.assertIn("Available Products (5 surfaced matches):", messages[-1]["content"])
+        self.assertIn("I found 5 strong matches", messages[-1]["content"])
 
     def test_compare_workflow_without_agent_acts_uses_plain_synthesis(self):
         agent = MVPCommerceAgent(

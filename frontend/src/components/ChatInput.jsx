@@ -2,7 +2,21 @@
 
 import { useState, useRef } from "react";
 
-export default function ChatInput({ onSend, disabled }) {
+const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg"]);
+const SUPPORTED_EXTENSIONS = [".png", ".jpg", ".jpeg"];
+const UNSUPPORTED_IMAGE_MESSAGE =
+  "That image format isn't supported yet. Please upload PNG, JPG, or JPEG.";
+
+function isSupportedImageFile(file) {
+  if (!file) return false;
+  if (file.type && SUPPORTED_IMAGE_TYPES.has(file.type.toLowerCase())) {
+    return true;
+  }
+  const name = String(file.name || "").toLowerCase();
+  return SUPPORTED_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
+
+export default function ChatInput({ onSend, onUnsupportedImage, disabled }) {
   const [text, setText] = useState("");
   const [image, setImage] = useState(null);
   const fileInputRef = useRef(null);
@@ -27,7 +41,17 @@ export default function ChatInput({ onSend, disabled }) {
 
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files[0]) {
-      setImage(e.target.files[0]);
+      const nextImage = e.target.files[0];
+      if (!isSupportedImageFile(nextImage)) {
+        setImage(null);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
+        e.target.value = "";
+        onUnsupportedImage?.(UNSUPPORTED_IMAGE_MESSAGE);
+        return;
+      }
+      setImage(nextImage);
       e.target.value = "";
     }
   };
@@ -119,7 +143,7 @@ export default function ChatInput({ onSend, disabled }) {
           type="file"
           ref={fileInputRef}
           onChange={handleFileChange}
-          accept="image/*"
+          accept=".png,.jpg,.jpeg,image/png,image/jpeg"
           style={{ display: "none" }}
         />
 

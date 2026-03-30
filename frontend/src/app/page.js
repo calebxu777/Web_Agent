@@ -40,6 +40,21 @@ export default function Home() {
     }
   };
 
+  const appendAssistantMessage = (content) => {
+    if (!content) return;
+    setMessages((prev) => [
+      ...prev,
+      { id: Date.now() + Math.random(), role: "assistant", content },
+    ]);
+  };
+
+  const handleUnsupportedImage = (content) => {
+    setIsTyping(false);
+    setPipelineStage(null);
+    setPipelineMsg("");
+    appendAssistantMessage(content);
+  };
+
   const fileToDataUrl = (file) =>
     new Promise((resolve, reject) => {
       if (!file) {
@@ -134,6 +149,13 @@ export default function Home() {
               assistantContent += data.content;
               upsertAssistant();
             }
+
+            if (data.type === "error") {
+              assistantContent += data.message || "Something went wrong while processing that request.";
+              upsertAssistant();
+              setIsTyping(false);
+              setPipelineStage(null);
+            }
           } catch (err) {
             /* ignore malformed chunks */
           }
@@ -206,7 +228,11 @@ export default function Home() {
           />
         </div>
         <div style={{ width: "100%", pointerEvents: "auto" }} className="animate-slide-up">
-          <ChatInput onSend={sendMessage} disabled={isTyping} />
+          <ChatInput
+            onSend={sendMessage}
+            onUnsupportedImage={handleUnsupportedImage}
+            disabled={isTyping}
+          />
         </div>
       </div>
 

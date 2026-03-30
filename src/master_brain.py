@@ -40,7 +40,7 @@ SYNTHESIS_PROMPT_TEMPLATE = """Based on the user's query and the following produ
 
 **User Query:** {query}
 
-**Available Products (Top 10):**
+**Available Products ({total_candidates} surfaced matches):**
 {products_context}
 
 **Instructions:**
@@ -49,6 +49,8 @@ SYNTHESIS_PROMPT_TEMPLATE = """Based on the user's query and the following produ
 3. If a product has reviews, reference them naturally
 4. Mention any trade-offs honestly
 5. End with a follow-up question to refine preferences
+6. If you only discuss a subset of the surfaced matches, acknowledge that naturally first, for example: "I found {total_candidates} strong matches, and among them I'd especially recommend..."
+7. Do not imply that the few products you mention are the only matches if more surfaced products were provided
 
 {memory_context}
 
@@ -145,6 +147,7 @@ class MasterBrain:
 
         synthesis_content = SYNTHESIS_PROMPT_TEMPLATE.format(
             query=user_query,
+            total_candidates=len(products),
             products_context=products_context,
             memory_context=memory_section,
         )
