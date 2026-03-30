@@ -194,6 +194,8 @@ class WorksheetEngine:
         for field in definition.fields:
             if not field.required:
                 continue
+            if not field.blocks_progress:
+                continue
             if not self.is_field_active(field, values):
                 continue
             if values.get(field.name) in (None, "", []):

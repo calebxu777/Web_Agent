@@ -16,6 +16,7 @@ fields:
     type: str
     kind: input
     required: true
+    blocks_progress: false
     description: The type of product the customer wants to shop for.
     question: What kind of product are you shopping for right now?
   - name: style_tags

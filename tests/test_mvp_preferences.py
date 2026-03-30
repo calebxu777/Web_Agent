@@ -287,7 +287,7 @@ class MVPPreferenceTests(unittest.TestCase):
 
         self.assertIn("- colors: red", agent.router.last_preference_context)
 
-    def test_clarification_turn_still_stores_preferences_from_turn_analysis(self):
+    def test_partial_search_turn_still_stores_preferences_from_turn_analysis(self):
         agent = MVPCommerceAgent(
             TEST_CONFIG,
             MVPConfig(
@@ -316,6 +316,8 @@ class MVPPreferenceTests(unittest.TestCase):
                 )
             }
         )
+        agent.retriever = FakeRetriever()
+        agent.master_brain = FakeMasterBrain()
         agent._initialized = True
 
         async def collect_events():
@@ -331,10 +333,15 @@ class MVPPreferenceTests(unittest.TestCase):
 
         events = asyncio.run(collect_events())
         token_events = [event for event in events if event.get("type") == "token"]
+        product_events = [event for event in events if event.get("type") == "products"]
+        worksheet_events = [event for event in events if event.get("type") == "worksheet_state"]
         session_profile = agent.preference_store.get_session_profile("session-clarify")
 
         self.assertTrue(token_events)
-        self.assertEqual(token_events[-1]["content"], "What kind of product are you shopping for right now?")
+        self.assertTrue(product_events)
+        self.assertTrue(worksheet_events)
+        self.assertEqual(worksheet_events[-1]["worksheet"]["status"], "active")
+        self.assertEqual("".join(event["content"] for event in token_events), "Here is a result.")
         self.assertEqual(session_profile.preferences, {"color": ["red"]})
 
     def test_agent_finalize_session_persists_preferences(self):

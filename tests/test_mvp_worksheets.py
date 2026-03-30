@@ -17,7 +17,7 @@ class MVPWorksheetTests(unittest.TestCase):
         self.assertEqual(self.definition.name, "product_search")
         self.assertIn("text_search", self.definition.trigger_intents)
 
-    def test_missing_required_product_type_triggers_clarification(self):
+    def test_missing_product_type_does_not_block_partial_search(self):
         instance = self.engine.create_instance(self.definition)
         decomposed = DecomposedQuery(
             intent=IntentType.TEXT_SEARCH,
@@ -35,12 +35,12 @@ class MVPWorksheetTests(unittest.TestCase):
             include_web=False,
         )
 
-        self.assertEqual(updated.status, "awaiting_input")
-        self.assertEqual(updated.missing_required_fields, ["product_type"])
-        self.assertEqual(
-            self.engine.build_clarification_question(self.definition, updated),
-            "What kind of product are you shopping for right now?",
-        )
+        self.assertEqual(updated.status, "active")
+        self.assertEqual(updated.missing_required_fields, [])
+        combined = self.engine.build_query_from_instance(updated, "show me something cheaper")
+        self.assertEqual(combined.filters["price_max"], 100)
+        self.assertNotIn("category", combined.filters)
+        self.assertIn("cheaper", combined.rewritten_query.lower())
 
     def test_follow_up_turn_reuses_existing_product_type(self):
         instance = self.engine.create_instance(self.definition)

@@ -205,7 +205,7 @@ class MVPFeatureTests(unittest.TestCase):
         self.assertEqual(payload["type"], "status")
         self.assertEqual(payload["stage"], "sourcing_web")
 
-    def test_text_search_worksheet_asks_for_product_type_before_retrieval(self):
+    def test_text_search_worksheet_allows_partial_query_without_product_type(self):
         agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_worksheets=True))
         agent.sqlite = FakeSQLite()
         agent.router = FakeRouter(
@@ -217,6 +217,8 @@ class MVPFeatureTests(unittest.TestCase):
                 rewritten_query="something cheaper under 100",
             )
         )
+        agent.retriever = FakeRetriever()
+        agent.master_brain = FakeMasterBrain()
 
         async def collect_events():
             return [
@@ -233,10 +235,13 @@ class MVPFeatureTests(unittest.TestCase):
 
         token_events = [event for event in events if event.get("type") == "token"]
         worksheet_events = [event for event in events if event.get("type") == "worksheet_state"]
+        product_events = [event for event in events if event.get("type") == "products"]
 
         self.assertTrue(worksheet_events)
-        self.assertEqual(worksheet_events[-1]["worksheet"]["status"], "awaiting_input")
-        self.assertEqual(token_events[-1]["content"], "What kind of product are you shopping for right now?")
+        self.assertEqual(worksheet_events[-1]["worksheet"]["status"], "active")
+        self.assertEqual(worksheet_events[-1]["worksheet"]["missing_required_fields"], [])
+        self.assertTrue(product_events)
+        self.assertEqual("".join(event["content"] for event in token_events), "Here is a result.")
 
     def test_compare_workflow_uses_last_search_results(self):
         agent = MVPCommerceAgent(

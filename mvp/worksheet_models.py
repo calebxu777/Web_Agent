@@ -21,6 +21,7 @@ class WorksheetFieldDefinition(BaseModel):
     type: str = "str"
     kind: Literal["input", "internal", "output"] = "input"
     required: bool = False
+    blocks_progress: bool = False
     dont_ask: bool = False
     confirm: bool = False
     description: str = ""
