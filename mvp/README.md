@@ -40,8 +40,9 @@ Preference memory is intentionally lightweight. Turn-level preferences inferred 
 
 - **Limited context awareness**: the current MVP is still weak at conversational carryover when the next turn depends on implied references instead of explicit restatement. For example, if the user first says `recommend me some jeans` and then follows with `recommend me some blue ones`, the system may not reliably resolve what `ones` refers to.
 - **Worksheet structure is for the backend, not the user**: the worksheet is meant to help the router, retrieval stack, and response generation stay structured around catalog-supported fields, but user turns should still remain permissive, especially when web search may surface products with looser or different schemas.
-- **Small local catalog**: the local product database is still relatively small, so retrieval quality and variety are constrained by coverage, not just model quality.
+- **Small local catalog**: the local product database is still relatively small, so retrieval quality and variety are constrained by coverage, not just model quality. some data does not have image to it.
 - **Latency is still heavier than the long-term target**: right now the MVP can spend expensive model time on routing, reranking, and other small subtasks that do not necessarily need a larger API model.
+  
 
 ## Planned Improvements
 
