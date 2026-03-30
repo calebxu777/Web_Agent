@@ -254,7 +254,11 @@ class MVPRouter:
     ) -> str:
         product_summaries = []
         for i, product in enumerate(products):
-            summary = f"[{i}] {product.get('title', '')} | ${product.get('price', 'N/A')} | {product.get('brand', '')}"
+            summary = (
+                f"[{i}] {product.get('title', '')} | ${product.get('price', 'N/A')} | "
+                f"{product.get('brand', '')} | category={product.get('category', '')} | "
+                f"subcategory={product.get('subcategory', '')}"
+            )
             product_summaries.append(summary)
 
         preference_section = ""
@@ -264,8 +268,11 @@ class MVPRouter:
 Ranking rule:
 - Prioritize relevance to the current request first.
 - Use stored preferences only as a secondary signal.
+- Treat stored preferences as a weak tie-breaker, not a primary ranking factor.
 - Do not override explicit constraints in the current query.
 - If the current query conflicts with saved preferences, follow the current query.
+- Never use saved preferences to change the requested product type or category.
+- Prefer items whose title/category/subcategory match the current request, even if another item matches stored preferences better.
 
 """
 

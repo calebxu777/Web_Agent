@@ -36,6 +36,104 @@ When agent acts are enabled, the final response can be generated through structu
 
 Preference memory is intentionally lightweight. Turn-level preferences inferred during routing are merged into a session profile in Redis, and `POST /api/session/finalize` can persist the merged profile into SQLite for longer-term reuse by nickname or user identity. The preference layer is designed to influence reranking and continuity, not to replace explicit query constraints from the current turn.
 
+## How To Use
+
+This is the current repo-level path for running and testing the MVP backend.
+
+### 1. Configure the MVP
+
+From the repo root, copy [`mvp/.env.example`](.env.example) to `mvp/.env` and fill in your real keys.
+
+At minimum, set:
+
+- `OPENAI_API_KEY`
+- `SERPAPI_API_KEY` if you want web search
+
+Feature flags you will likely want to toggle while testing:
+
+- `MVP_USE_WORKSHEETS=true` to keep multi-turn worksheet state
+- `MVP_USE_AGENT_ACTS=true` to use grounded response acts
+- `MVP_USE_PREFERENCE_INFERENCE=true` to infer turn-level preferences
+- `MVP_USE_PREFERENCE_RERANKING=true` to let reranking reuse stored preferences
+- `MVP_EMIT_WORKSHEET_EVENTS=false` if you want the worksheet logic active in the backend without showing the worksheet panel on the frontend
+
+### 2. Start Redis If Memory Is Enabled
+
+If `MVP_USE_MEMORY=true`, start Redis before launching the backend. The MVP also uses Redis-backed session state for short-horizon memory and preference/session caching when available.
+
+### 3. Run The MVP Backend
+
+From the repo root:
+
+```powershell
+& "C:\Users\Caleb\miniconda3\envs\commerce-agent\python.exe" -m uvicorn mvp.api:app --host 127.0.0.1 --port 8011
+```
+
+Quick backend check:
+
+```powershell
+curl http://127.0.0.1:8011/health
+```
+
+### 4. Run The Frontend
+
+In a separate terminal:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Then open `http://localhost:3000`.
+
+### 5. Use The MVP In The UI
+
+The current frontend supports:
+
+- general shopping chat
+- text-based search
+- image-based search
+- local vs local-plus-web search toggle
+- nickname-based identity
+
+Typical test flow:
+
+1. Set a nickname so the backend can associate memory and finalized preferences with a stable user ID.
+2. Ask for products with text, for example `recommend me some black hoodies under $80`.
+3. Try follow-up constraints, comparison requests, or image uploads.
+4. Toggle web search on if you want local-plus-web product results instead of catalog-only results.
+
+### 6. Finalize A Session When You Want To Persist It
+
+At the end of a conversation, call:
+
+```powershell
+curl -X POST http://127.0.0.1:8011/api/session/finalize `
+  -H "Content-Type: application/json" `
+  -d "{\"session_id\":\"YOUR_SESSION_ID\",\"user_id\":\"YOUR_USER_ID\"}"
+```
+
+That finalize step is where the MVP currently:
+
+- merges session preferences into the durable SQLite preference DB
+- appends a local conversation record to `mvp/evaluation/conversation_recordings.jsonl`
+- uploads the preference DB to GCS under `preference/`
+- appends the finalized conversation record to GCS under `evaluations/recording.jsonl`
+
+### 7. Run Offline Evaluation On Recorded Conversations
+
+After conversations have been recorded, you can evaluate them locally or from GCS:
+
+```powershell
+& "C:\Users\Caleb\miniconda3\envs\commerce-agent\python.exe" -m mvp.evaluation.evaluator `
+  --input gs://web-agent-data-caleb-2026/evaluations/recording.jsonl `
+  --mode both `
+  --output mvp/evaluation/evaluation_report.json
+```
+
+Use `--mode python` for deterministic rubric scoring, `--mode llm` for API-based critic scoring, or `--mode both` to generate both views in the same report.
+
 ## MVP Limitations
 
 - **Limited context awareness**: the current MVP is still weak at conversational carryover when the next turn depends on implied references instead of explicit restatement. For example, if the user first says `recommend me some jeans` and then follows with `recommend me some blue ones`, the system may not reliably resolve what `ones` refers to.

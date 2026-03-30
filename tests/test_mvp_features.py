@@ -124,6 +124,32 @@ class MVPFeatureTests(unittest.TestCase):
             "https://storage.googleapis.com/web-agent-data-caleb-2026/amazon/amz_B08JGH3FQ7.jpg",
         )
 
+    def test_live_text_search_product_normalization_uses_image_url_fallback(self):
+        product = {
+            "title": "Everyday Tee",
+            "image_url": "amazon/amz_B012345678.jpg",
+        }
+
+        normalized = self.agent._normalize_product(product)
+
+        self.assertEqual(
+            normalized["image"],
+            "https://storage.googleapis.com/web-agent-data-caleb-2026/amazon/amz_B012345678.jpg",
+        )
+
+    def test_live_text_search_product_normalization_reads_json_image_list(self):
+        product = {
+            "title": "Graphic Tee",
+            "image_urls": "[\"amazon/amz_B000000001.jpg\", \"amazon/amz_B000000002.jpg\"]",
+        }
+
+        normalized = self.agent._normalize_product(product)
+
+        self.assertEqual(
+            normalized["image"],
+            "https://storage.googleapis.com/web-agent-data-caleb-2026/amazon/amz_B000000001.jpg",
+        )
+
     def test_text_query_sanitizer_drops_unknown_category_filter(self):
         query = DecomposedQuery(
             intent=IntentType.TEXT_SEARCH,
@@ -164,6 +190,32 @@ class MVPFeatureTests(unittest.TestCase):
 
         self.assertEqual(ranked[0]["product_id"], "1")
         self.assertGreater(ranked[0]["ranking_score"], ranked[1]["ranking_score"])
+
+    def test_keyword_boosts_penalize_other_product_types(self):
+        products = [
+            {
+                "product_id": "1",
+                "title": "Red Lightweight Jacket",
+                "subcategory": "Lightweight Jackets",
+                "category": "Clothing & Accessories",
+                "retrieval_score": 0.05,
+            },
+            {
+                "product_id": "2",
+                "title": "Black Pullover Hoodie",
+                "subcategory": "Active Hoodies",
+                "category": "Clothing & Accessories",
+                "retrieval_score": 0.01,
+            },
+        ]
+
+        ranked = self.agent._apply_keyword_type_boosts(
+            "recommend me hoodies",
+            products,
+            limit=2,
+        )
+
+        self.assertEqual(ranked[0]["product_id"], "2")
 
     def test_general_talk_route_detected_without_backend(self):
         router = MVPRouter(api_key="")
@@ -206,7 +258,7 @@ class MVPFeatureTests(unittest.TestCase):
         self.assertEqual(payload["stage"], "sourcing_web")
 
     def test_text_search_worksheet_allows_partial_query_without_product_type(self):
-        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_worksheets=True))
+        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_worksheets=True, emit_worksheet_events=True))
         agent.sqlite = FakeSQLite()
         agent.router = FakeRouter(
             DecomposedQuery(
@@ -243,10 +295,43 @@ class MVPFeatureTests(unittest.TestCase):
         self.assertTrue(product_events)
         self.assertEqual("".join(event["content"] for event in token_events), "Here is a result.")
 
+    def test_text_search_worksheet_does_not_emit_frontend_events_by_default(self):
+        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_worksheets=True))
+        agent.sqlite = FakeSQLite()
+        agent.router = FakeRouter(
+            DecomposedQuery(
+                intent=IntentType.TEXT_SEARCH,
+                original_query="show me something cheaper",
+                tags=["cheaper"],
+                filters={"price_max": 100},
+                rewritten_query="something cheaper under 100",
+            )
+        )
+        agent.retriever = FakeRetriever()
+        agent.master_brain = FakeMasterBrain()
+
+        async def collect_events():
+            return [
+                json.loads(event)
+                async for event in agent._workflow_text_search(
+                    user_id="user-1",
+                    session_id="session-hidden-worksheet",
+                    message="show me something cheaper",
+                    include_web=False,
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        worksheet_events = [event for event in events if event.get("type") == "worksheet_state"]
+        product_events = [event for event in events if event.get("type") == "products"]
+
+        self.assertFalse(worksheet_events)
+        self.assertTrue(product_events)
+
     def test_compare_workflow_uses_last_search_results(self):
         agent = MVPCommerceAgent(
             TEST_CONFIG,
-            MVPConfig(use_worksheets=True, use_agent_acts=True, act_mode="dynamic"),
+            MVPConfig(use_worksheets=True, emit_worksheet_events=True, use_agent_acts=True, act_mode="dynamic"),
         )
         search_definition = agent.worksheet_registry.get("product_search")
         search_instance = agent.worksheet_engine.create_instance(search_definition)
@@ -319,7 +404,7 @@ class MVPFeatureTests(unittest.TestCase):
     def test_compare_workflow_without_agent_acts_uses_plain_synthesis(self):
         agent = MVPCommerceAgent(
             TEST_CONFIG,
-            MVPConfig(use_worksheets=True, use_agent_acts=False, act_mode="off"),
+            MVPConfig(use_worksheets=True, emit_worksheet_events=True, use_agent_acts=False, act_mode="off"),
         )
         search_definition = agent.worksheet_registry.get("product_search")
         search_instance = agent.worksheet_engine.create_instance(search_definition)

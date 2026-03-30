@@ -194,6 +194,11 @@ async def lifespan(app: FastAPI):
         os.environ.get("MVP_USE_PREFERENCE_RERANKING"),
         default=False,
     )
+    emit_worksheet_events = resolve_env_flag(
+        os.environ.get("MVP_EMIT_WORKSHEET_EVENTS"),
+        default=False,
+    )
+    gcs_cfg = config.get("image_storage", {}).get("gcs", {})
 
     agent_config = MVPConfig(
         master_brain_model_name=os.environ.get("MVP_MASTER_BRAIN_MODEL", "gpt-4o-mini"),
@@ -225,8 +230,36 @@ async def lifespan(app: FastAPI):
             "MVP_USER_PREFERENCES_DB_PATH",
             "data/processed/user_preferences.db",
         ),
+        local_evaluation_recordings_path=os.environ.get(
+            "MVP_LOCAL_EVALUATION_RECORDINGS_PATH",
+            "mvp/evaluation/conversation_recordings.jsonl",
+        ),
         image_storage_provider="gcs",
         gcs_public_url=gcs_public_url,
+        gcs_bucket_name=os.environ.get(
+            "MVP_GCS_BUCKET_NAME",
+            gcs_cfg.get("bucket_name", "web-agent-data-caleb-2026"),
+        ),
+        gcs_project_id=os.environ.get(
+            "MVP_GCS_PROJECT_ID",
+            gcs_cfg.get("project_id", "webagent2026"),
+        ),
+        gcs_preferences_blob_path=os.environ.get(
+            "MVP_GCS_PREFERENCES_BLOB_PATH",
+            "preference/user_preferences.db",
+        ),
+        gcs_evaluation_blob_path=os.environ.get(
+            "MVP_GCS_EVALUATION_BLOB_PATH",
+            "evaluations/recording.jsonl",
+        ),
+        sync_preferences_to_gcs=resolve_env_flag(
+            os.environ.get("MVP_SYNC_PREFERENCES_TO_GCS"),
+            default=True,
+        ),
+        sync_evaluations_to_gcs=resolve_env_flag(
+            os.environ.get("MVP_SYNC_EVALUATIONS_TO_GCS"),
+            default=True,
+        ),
         log_timing=True,
         catalog_db_url=os.environ.get(
             "MVP_GCS_CATALOG_DB_URL",
@@ -238,6 +271,7 @@ async def lifespan(app: FastAPI):
         ),
         lancedb_manifest_url=os.environ.get("MVP_GCS_LANCEDB_MANIFEST_URL", ""),
         use_worksheets=use_worksheets,
+        emit_worksheet_events=emit_worksheet_events,
         use_agent_acts=use_agent_acts,
         act_mode=resolve_mvp_act_mode(
             os.environ.get("MVP_ACT_MODE"),

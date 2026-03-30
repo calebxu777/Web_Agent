@@ -22,6 +22,8 @@ data/processed/catalog.db
 # Evaluation results (generated locally)
 scripts/evaluation/results/
 scripts/evaluation/testing_prompts.jsonl
+mvp/evaluation/conversation_recordings.jsonl
+mvp/evaluation/evaluation_report.json
 
 # ====================
 # Models (downloaded / trained)

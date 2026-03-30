@@ -17,6 +17,7 @@ from mvp.preference_store import (
     SQLitePreferenceProfileStore,
 )
 from mvp.router import MVPRouter
+from src.schema import ChatMessage
 from src.schema import DecomposedQuery, IntentType
 
 
@@ -89,11 +90,28 @@ class AnalysisRouter:
         return products[:top_k]
 
 
+class FakeGCSSyncClient:
+    def __init__(self):
+        self.uploaded_files: list[tuple[str, str, str]] = []
+        self.appended_jsonl_records: list[tuple[str, dict]] = []
+
+    def upload_file(self, local_path, blob_name: str, content_type: str = "application/octet-stream") -> str:
+        self.uploaded_files.append((str(local_path), blob_name, content_type))
+        return f"gs://test-bucket/{blob_name}"
+
+    def append_jsonl_record(self, blob_name: str, record: dict) -> str:
+        self.appended_jsonl_records.append((blob_name, record))
+        return f"gs://test-bucket/{blob_name}"
+
+
 class MVPPreferenceTests(unittest.TestCase):
     def setUp(self):
         processed_dir = Path("data/processed")
         processed_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = str((processed_dir / f"test_user_preferences_{uuid4().hex}.db").resolve())
+        runtime_dir = Path("data/test_runtime")
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.evaluation_path = str((runtime_dir / f"conversation_recordings_{uuid4().hex}.jsonl").resolve())
         self._stores_to_close: list[PreferenceStore] = []
 
     def tearDown(self):
@@ -103,6 +121,9 @@ class MVPPreferenceTests(unittest.TestCase):
             path = Path(f"{self.db_path}{suffix}")
             if path.exists():
                 path.unlink()
+        eval_path = Path(self.evaluation_path)
+        if eval_path.exists():
+            eval_path.unlink()
 
     def build_store(self) -> PreferenceStore:
         store = PreferenceStore(
@@ -223,6 +244,8 @@ class MVPPreferenceTests(unittest.TestCase):
 
         self.assertIn("User preference context", prompt)
         self.assertIn("follow the current query", prompt)
+        self.assertIn("weak tie-breaker", prompt)
+        self.assertIn("Never use saved preferences to change the requested product type", prompt)
 
     def test_rerank_prompt_omits_preference_section_when_absent(self):
         router = MVPRouter(api_key="")
@@ -292,6 +315,7 @@ class MVPPreferenceTests(unittest.TestCase):
             TEST_CONFIG,
             MVPConfig(
                 use_worksheets=True,
+                emit_worksheet_events=True,
                 use_preference_inference=True,
                 user_preferences_db_path=self.db_path,
             ),
@@ -351,11 +375,21 @@ class MVPPreferenceTests(unittest.TestCase):
                 use_preference_inference=True,
                 use_preference_reranking=True,
                 user_preferences_db_path=self.db_path,
+                local_evaluation_recordings_path=self.evaluation_path,
             ),
         )
         if agent.preference_store:
             agent.preference_store.close()
         agent.preference_store = self.build_store()
+        agent.gcs_sync = FakeGCSSyncClient()
+        agent.conversation_recording_store.add_message(
+            "session-42",
+            ChatMessage(role="user", content="show me minimalist looks", timestamp=1.0),
+        )
+        agent.conversation_recording_store.add_message(
+            "session-42",
+            ChatMessage(role="assistant", content="Here are some minimalist options.", timestamp=2.0),
+        )
         agent.preference_store.update_session_preferences(
             user_id="caleb",
             session_id="session-42",
@@ -369,6 +403,16 @@ class MVPPreferenceTests(unittest.TestCase):
         self.assertEqual(result["status"], "finalized")
         self.assertEqual(result["preferences"], {"style": ["minimalist"]})
         self.assertIsNone(agent.preference_store.get_session_profile("session-42"))
+        self.assertEqual(result["evaluation_gcs_uri"], "gs://test-bucket/evaluations/recording.jsonl")
+        self.assertEqual(result["preference_db_gcs_uri"], "gs://test-bucket/preference/user_preferences.db")
+
+        local_recording = Path(self.evaluation_path).read_text(encoding="utf-8").strip().splitlines()
+        self.assertEqual(len(local_recording), 1)
+        payload = json.loads(local_recording[0])
+        self.assertEqual(payload["type"], "mvp")
+        self.assertEqual(payload["inferred_preferences"], {"style": ["minimalist"]})
+        self.assertEqual(payload["conversation"][0]["user"], "show me minimalist looks")
+        self.assertEqual(payload["conversation"][1]["agent"], "Here are some minimalist options.")
 
 
 if __name__ == "__main__":

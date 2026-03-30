@@ -20,6 +20,12 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
+from mvp.evaluation.record_for_evaluation import (
+    InMemoryConversationRecordingStore,
+    append_record_to_jsonl,
+    build_conversation_record,
+)
+from mvp.gcs_sync import MVPGCSSyncClient
 from mvp.preference_models import (
     TurnAnalysisResult,
     build_preference_context,
@@ -70,8 +76,16 @@ class MVPConfig:
     use_preference_reranking: bool = False
     preference_redis_ttl_seconds: int = 3600
     user_preferences_db_path: str = "data/processed/user_preferences.db"
+    local_evaluation_recordings_path: str = "mvp/evaluation/conversation_recordings.jsonl"
     image_storage_provider: str = "gcs"
     gcs_public_url: str = "https://storage.googleapis.com/web-agent-data-caleb-2026"
+    gcs_bucket_name: str = "web-agent-data-caleb-2026"
+    gcs_project_id: str = "webagent2026"
+    gcs_preferences_blob_path: str = "preference/user_preferences.db"
+    gcs_evaluation_blob_path: str = "evaluations/recording.jsonl"
+    sync_preferences_to_gcs: bool = True
+    sync_evaluations_to_gcs: bool = True
+    recording_type: str = "mvp"
     catalog_db_url: str = "https://storage.googleapis.com/web-agent-data-caleb-2026/metadata/catalog.db"
     lancedb_public_prefix: str = "https://storage.googleapis.com/web-agent-data-caleb-2026/data/processed/lancedb"
     lancedb_manifest_url: str = ""
@@ -81,6 +95,7 @@ class MVPConfig:
 
     # ---- Worksheet/Acts Feature Switches ----
     use_worksheets: bool = False
+    emit_worksheet_events: bool = False
     use_agent_acts: bool = False
 
     # ---- Grounded Response Acts ----
@@ -133,6 +148,15 @@ class MVPCommerceAgent:
         self.memory = None
         self.web_pipeline = None
         self.preference_store: PreferenceStore | None = None
+        self.gcs_sync: MVPGCSSyncClient | None = (
+            MVPGCSSyncClient(
+                bucket_name=self.ac.gcs_bucket_name,
+                project_id=self.ac.gcs_project_id,
+            )
+            if self.ac.gcs_bucket_name
+            else None
+        )
+        self.conversation_recording_store = InMemoryConversationRecordingStore()
         self.worksheet_registry = WorksheetRegistry()
         self.worksheet_router = WorksheetRouter(self.worksheet_registry)
         self.worksheet_engine = WorksheetEngine()
@@ -152,8 +176,20 @@ class MVPCommerceAgent:
     def _acts_enabled(self) -> bool:
         return self.ac.use_agent_acts and self.ac.act_mode != "off"
 
+    def _worksheet_events_enabled(self) -> bool:
+        return self.ac.use_worksheets and self.ac.emit_worksheet_events
+
     def _preferences_enabled(self) -> bool:
         return self.ac.use_preference_inference or self.ac.use_preference_reranking
+
+    def _serialize_worksheet_event(
+        self,
+        definition: WorksheetDefinition,
+        instance: WorksheetInstance,
+    ) -> str | None:
+        if not self._worksheet_events_enabled():
+            return None
+        return json.dumps(self.worksheet_engine.build_event_payload(definition, instance))
 
     def _ensure_preference_services(self) -> None:
         if not self._preferences_enabled():
@@ -171,12 +207,17 @@ class MVPCommerceAgent:
             )
 
     def _record_assistant_message(self, session_id: str, content: str) -> None:
+        assistant_message = ChatMessage(role="assistant", content=content, timestamp=time.time())
+        self._record_conversation_message(session_id, assistant_message)
         if not self.memory:
             return
         self.memory.on_assistant_message(
             session_id,
-            ChatMessage(role="assistant", content=content, timestamp=time.time()),
+            assistant_message,
         )
+
+    def _record_conversation_message(self, session_id: str, message: ChatMessage) -> None:
+        self.conversation_recording_store.add_message(session_id, message)
 
     def _store_captured_preferences(
         self,
@@ -230,6 +271,77 @@ class MVPCommerceAgent:
             if self.ac.log_timing:
                 print(f"  [preferences] context unavailable: {exc}")
             return ""
+
+    def _get_full_conversation_messages(self, session_id: str) -> list[ChatMessage]:
+        if self.memory:
+            try:
+                messages = self.memory.episodic.get_full_conversation(session_id)
+                if messages:
+                    return messages
+            except Exception as exc:
+                if self.ac.log_timing:
+                    print(f"  [evaluation] redis conversation fetch skipped: {exc}")
+        return self.conversation_recording_store.get_messages(session_id)
+
+    def _append_evaluation_record(
+        self,
+        user_id: str,
+        session_id: str,
+        preferences: dict[str, object],
+    ) -> tuple[str | None, str | None]:
+        messages = self._get_full_conversation_messages(session_id)
+        if not messages:
+            return None, None
+
+        record = build_conversation_record(
+            user_id=user_id,
+            session_id=session_id,
+            messages=messages,
+            inferred_preferences=preferences,
+            record_type=self.ac.recording_type,
+        )
+        local_path = append_record_to_jsonl(self.ac.local_evaluation_recordings_path, record)
+
+        gcs_uri = None
+        if self.ac.sync_evaluations_to_gcs and self.gcs_sync:
+            try:
+                gcs_uri = self.gcs_sync.append_jsonl_record(
+                    self.ac.gcs_evaluation_blob_path,
+                    record,
+                )
+            except Exception as exc:
+                if self.ac.log_timing:
+                    print(f"  [evaluation] gcs sync skipped: {exc}")
+
+        return str(local_path), gcs_uri
+
+    def _sync_preferences_db_to_gcs(self) -> str | None:
+        if not self.ac.sync_preferences_to_gcs or not self.gcs_sync:
+            return None
+
+        db_path = Path(self.ac.user_preferences_db_path)
+        if not db_path.exists():
+            return None
+
+        try:
+            return self.gcs_sync.upload_file(
+                db_path,
+                self.ac.gcs_preferences_blob_path,
+                content_type="application/x-sqlite3",
+            )
+        except Exception as exc:
+            if self.ac.log_timing:
+                print(f"  [preferences] gcs db sync skipped: {exc}")
+            return None
+
+    def _clear_session_artifacts(self, session_id: str) -> None:
+        self.conversation_recording_store.clear_session(session_id)
+        if self.memory:
+            try:
+                self.memory.episodic.clear_session(session_id)
+            except Exception as exc:
+                if self.ac.log_timing:
+                    print(f"  [evaluation] session cleanup skipped: {exc}")
 
     @staticmethod
     def _build_compare_synthesis_prompt(message: str, comparison_dimensions: list[str]) -> str:
@@ -456,7 +568,7 @@ class MVPCommerceAgent:
 
     def _normalize_product(self, product: dict) -> dict:
         item = dict(product)
-        explicit_image = str(item.get("image", "") or "").strip()
+        explicit_image = str(item.get("image", "") or item.get("image_url", "") or "").strip()
         raw_images = item.get("image_urls", "")
         first_image = ""
 
@@ -465,10 +577,23 @@ class MVPCommerceAgent:
         elif isinstance(raw_images, list):
             first_image = raw_images[0] if raw_images else ""
         elif isinstance(raw_images, str):
-            first_image = raw_images.split(",")[0].strip() if raw_images else ""
+            cleaned = raw_images.strip()
+            if cleaned.startswith("[") and cleaned.endswith("]"):
+                try:
+                    parsed = json.loads(cleaned)
+                    if isinstance(parsed, list) and parsed:
+                        first_image = str(parsed[0]).strip()
+                except Exception:
+                    first_image = cleaned.split(",")[0].strip() if cleaned else ""
+            else:
+                first_image = cleaned.split(",")[0].strip() if cleaned else ""
 
         item["image"] = self.ac.resolve_image_url(first_image)
-        item["image_urls"] = item["image"] or raw_images
+        item["image_urls"] = (
+            item["image"]
+            or self.ac.resolve_image_url(str(item.get("image_url", "") or "").strip())
+            or raw_images
+        )
         item["merchant"] = item.get("merchant") or item.get("brand") or ""
         return item
 
@@ -530,39 +655,41 @@ class MVPCommerceAgent:
         if not products:
             return products
 
+        product_type_markers = {
+            "jacket",
+            "jackets",
+            "coat",
+            "coats",
+            "blazer",
+            "blazers",
+            "shacket",
+            "shackets",
+            "parka",
+            "parkas",
+            "hoodie",
+            "hoodies",
+            "windbreaker",
+            "windbreakers",
+            "bomber",
+            "bombers",
+            "shirt",
+            "shirts",
+            "dress",
+            "dresses",
+            "shoe",
+            "shoes",
+            "sneaker",
+            "sneakers",
+            "bag",
+            "bags",
+            "boot",
+            "boots",
+        }
+
         keyword_candidates = {
             token
             for token in self._tokenize_keywords(query_text)
-            if token in {
-                "jacket",
-                "jackets",
-                "coat",
-                "coats",
-                "blazer",
-                "blazers",
-                "shacket",
-                "shackets",
-                "parka",
-                "parkas",
-                "hoodie",
-                "hoodies",
-                "windbreaker",
-                "windbreakers",
-                "bomber",
-                "bombers",
-                "shirt",
-                "shirts",
-                "dress",
-                "dresses",
-                "shoe",
-                "shoes",
-                "sneaker",
-                "sneakers",
-                "bag",
-                "bags",
-                "boot",
-                "boots",
-            }
+            if token in product_type_markers
         }
         if not keyword_candidates:
             return products[:limit]
@@ -585,12 +712,22 @@ class MVPCommerceAgent:
                 if any(variant and variant in category for variant in variants):
                     boost += 0.5
 
-            # Mild penalty for obvious misses when a strong product type is requested.
-            if boost == 0.0 and any(
-                marker in combined
-                for marker in ["cap", "hat", "skirt", "dress", "sandal", "bag", "shirt"]
-            ):
-                boost -= 1.0
+            # Stronger penalty when the product clearly matches a different product type
+            # than the one requested by the current query.
+            if boost == 0.0:
+                other_type_match = False
+                for marker in product_type_markers:
+                    singular = marker[:-1] if marker.endswith("s") else marker
+                    if singular in combined or marker in combined:
+                        other_type_match = True
+                        break
+                if other_type_match:
+                    boost -= 3.0
+                elif any(
+                    marker in combined
+                    for marker in ["cap", "hat", "skirt", "dress", "sandal", "bag", "shirt"]
+                ):
+                    boost -= 1.0
 
             updated = dict(product)
             updated["keyword_boost"] = boost
@@ -738,10 +875,12 @@ class MVPCommerceAgent:
             yield PipelineStage.to_sse(PipelineStage.COLD_START)
             self.initialize()
 
+        user_message = ChatMessage(role="user", content=message, timestamp=time.time())
+        self._record_conversation_message(session_id, user_message)
         if self.memory:
             self.memory.on_user_message(
                 session_id,
-                ChatMessage(role="user", content=message, timestamp=time.time()),
+                user_message,
             )
 
         active_instance = self.worksheet_store.get(session_id) if self.ac.use_worksheets else None
@@ -833,7 +972,9 @@ class MVPCommerceAgent:
         yield PipelineStage.to_sse(PipelineStage.PREPARING_COMPARE)
         definition, worksheet_instance = self._prepare_compare_worksheet(session_id, message)
         self._log_stage("prepare_compare", t0)
-        yield json.dumps(self.worksheet_engine.build_event_payload(definition, worksheet_instance))
+        worksheet_event = self._serialize_worksheet_event(definition, worksheet_instance)
+        if worksheet_event:
+            yield worksheet_event
 
         comparison_products = list(worksheet_instance.result_refs.get("comparison_products", []))
         if len(comparison_products) < 2:
@@ -936,7 +1077,9 @@ class MVPCommerceAgent:
             query = self.worksheet_engine.build_query_from_instance(worksheet_instance, message)
             query = self._sanitize_query(query)
             self._log_stage("decomposition", t0)
-            yield json.dumps(self.worksheet_engine.build_event_payload(definition, worksheet_instance))
+            worksheet_event = self._serialize_worksheet_event(definition, worksheet_instance)
+            if worksheet_event:
+                yield worksheet_event
 
             search_query_text = query.rewritten_query or message
 
@@ -1018,7 +1161,9 @@ class MVPCommerceAgent:
 
         frontend_items = [self._normalize_product(item) for item in reranked[: self.ac.top_k_final]]
         if self.ac.use_worksheets and definition and worksheet_instance:
-            yield json.dumps(self.worksheet_engine.build_event_payload(definition, worksheet_instance))
+            worksheet_event = self._serialize_worksheet_event(definition, worksheet_instance)
+            if worksheet_event:
+                yield worksheet_event
         yield json.dumps({"type": "products", "items": frontend_items, "tags": query.tags, "filters": query.filters})
 
         t0 = time.time()
@@ -1234,13 +1379,25 @@ class MVPCommerceAgent:
         if self.preference_store:
             stored_profile = self.preference_store.finalize_session(user_id, session_id)
 
+        preferences = stored_profile.preferences if stored_profile else {}
+        evaluation_record_path, evaluation_gcs_uri = self._append_evaluation_record(
+            user_id=user_id,
+            session_id=session_id,
+            preferences=preferences,
+        )
+        preference_db_gcs_uri = self._sync_preferences_db_to_gcs()
+
         if self.ac.use_worksheets:
             self.worksheet_store.clear(session_id)
+        self._clear_session_artifacts(session_id)
 
         return {
             "status": "finalized",
             "user_id": user_id,
             "session_id": session_id,
-            "preferences": stored_profile.preferences if stored_profile else {},
+            "preferences": preferences,
             "updated_at": stored_profile.updated_at if stored_profile else None,
+            "evaluation_record_path": evaluation_record_path,
+            "evaluation_gcs_uri": evaluation_gcs_uri,
+            "preference_db_gcs_uri": preference_db_gcs_uri,
         }
