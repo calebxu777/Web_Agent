@@ -53,6 +53,22 @@ class FakeRouter:
         return products[:top_k]
 
 
+class RecordingRouter(FakeRouter):
+    def __init__(self, query: DecomposedQuery):
+        super().__init__(query)
+        self.last_top_k = None
+
+    def rerank(
+        self,
+        _query: str,
+        products: list[dict],
+        top_k: int = 10,
+        preference_context: str = "",
+    ) -> list[dict]:
+        self.last_top_k = top_k
+        return super().rerank(_query, products, top_k=top_k, preference_context=preference_context)
+
+
 class FakeMasterBrain:
     async def grounded_synthesize_stream(
         self,
@@ -91,6 +107,16 @@ class FakeRetriever:
                 "brand": "Test Brand",
             }
         ]
+
+
+class ConfigurableRetriever(FakeRetriever):
+    def __init__(self, products: list[dict]):
+        super().__init__()
+        self.products = products
+
+    def search_text(self, _query):
+        self.last_query = _query
+        return list(self.products)
 
 
 class FollowupRouter(FakeRouter):
@@ -205,6 +231,16 @@ class MVPFeatureTests(unittest.TestCase):
         ranked = self.agent._prioritize_products_with_images(products)
 
         self.assertEqual(ranked[0]["product_id"], "2")
+
+    def test_generation_stage_uses_non_personalized_copy_for_anonymous_users(self):
+        self.assertEqual(
+            self.agent._generation_stage("anon_session-123", mode="recommendations"),
+            PipelineStage.GENERATING_RECOMMENDATIONS,
+        )
+        self.assertEqual(
+            self.agent._generation_stage("caleb", mode="recommendations"),
+            PipelineStage.GENERATING_PERSONALIZED,
+        )
 
     def test_text_query_sanitizer_drops_unknown_category_filter(self):
         query = DecomposedQuery(
@@ -526,6 +562,89 @@ class MVPFeatureTests(unittest.TestCase):
         self.assertFalse(worksheet_events)
         self.assertTrue(product_events)
         self.assertEqual("".join(event["content"] for event in token_events), "Here is a result.")
+
+    def test_text_search_anonymous_status_is_not_personalized(self):
+        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_worksheets=False))
+        agent.sqlite = FakeSQLite()
+        agent.router = FakeRouter(
+            DecomposedQuery(
+                intent=IntentType.TEXT_SEARCH,
+                original_query="recommend some jackets",
+                tags=["jacket"],
+                filters={},
+                rewritten_query="jackets",
+            )
+        )
+        agent.retriever = FakeRetriever()
+        agent.master_brain = FakeMasterBrain()
+
+        async def collect_events():
+            return [
+                json.loads(event)
+                async for event in agent._workflow_text_search(
+                    user_id="anon_session-xyz",
+                    session_id="session-anon-status",
+                    message="recommend some jackets",
+                    include_web=False,
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        generating_events = [
+            event for event in events if event.get("type") == "status" and event.get("stage") == "generating"
+        ]
+
+        self.assertTrue(generating_events)
+        self.assertEqual(generating_events[-1]["message"], "Generating recommendations...")
+
+    def test_text_search_prefers_image_bearing_products_from_larger_rerank_window(self):
+        agent = MVPCommerceAgent(
+            TEST_CONFIG,
+            MVPConfig(use_worksheets=False, top_k_final=2, top_k_reranked=6),
+        )
+        agent.sqlite = FakeSQLite()
+        agent.router = RecordingRouter(
+            DecomposedQuery(
+                intent=IntentType.TEXT_SEARCH,
+                original_query="recommend some t-shirts",
+                tags=["t-shirt"],
+                filters={},
+                rewritten_query="t-shirts",
+            )
+        )
+        agent.retriever = ConfigurableRetriever(
+            [
+                {"product_id": "p1", "title": "Plain Tee 1"},
+                {"product_id": "p2", "title": "Plain Tee 2"},
+                {"product_id": "p3", "title": "Plain Tee 3"},
+                {"product_id": "p4", "title": "Plain Tee 4"},
+                {"product_id": "p5", "title": "Plain Tee 5"},
+                {
+                    "product_id": "p6",
+                    "title": "Blue Tee With Image",
+                    "image_urls": "amazon/amz_B000000111.jpg",
+                },
+            ]
+        )
+        agent.master_brain = FakeMasterBrain()
+
+        async def collect_events():
+            return [
+                json.loads(event)
+                async for event in agent._workflow_text_search(
+                    user_id="anon_session-images",
+                    session_id="session-image-window",
+                    message="recommend some t-shirts",
+                    include_web=False,
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        product_events = [event for event in events if event.get("type") == "products"]
+
+        self.assertTrue(product_events)
+        self.assertEqual(agent.router.last_top_k, 6)
+        self.assertEqual(product_events[-1]["items"][0]["product_id"], "p6")
 
     def test_compare_workflow_without_agent_acts_uses_plain_synthesis(self):
         agent = MVPCommerceAgent(

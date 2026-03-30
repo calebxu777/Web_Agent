@@ -72,6 +72,7 @@ export default function Home() {
       let assistantContent = "";
       let assistantProducts = [];
       let hasAddedAssistant = false;
+      let sseBuffer = "";
 
       const upsertAssistant = () => {
         if (!hasAddedAssistant) {
@@ -91,45 +92,56 @@ export default function Home() {
         }
       };
 
+      const processSseLine = (line) => {
+        if (line.trim() === "data: [DONE]") {
+          setIsTyping(false);
+          setPipelineStage(null);
+          return;
+        }
+        if (line.startsWith("data: ")) {
+          try {
+            const data = JSON.parse(line.slice(6));
+
+            if (data.type === "status") {
+              setPipelineStage(data.stage);
+              setPipelineMsg(data.message);
+            }
+
+            if (data.type === "worksheet_state") {
+              setWorksheetState(data.worksheet);
+            }
+
+            if (data.type === "products") {
+              assistantProducts = data.items;
+              upsertAssistant();
+            }
+
+            if (data.type === "token") {
+              assistantContent += data.content;
+              upsertAssistant();
+            }
+          } catch (err) {
+            /* ignore malformed chunks */
+          }
+        }
+      };
+
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
+        sseBuffer += decoder.decode(value || new Uint8Array(), { stream: !done });
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
+        const lines = sseBuffer.split("\n");
+        sseBuffer = done ? "" : (lines.pop() ?? "");
 
         for (const line of lines) {
-          if (line.trim() === "data: [DONE]") {
-            setIsTyping(false);
-            setPipelineStage(null);
-            break;
+          processSseLine(line);
+        }
+
+        if (done) {
+          if (sseBuffer.trim()) {
+            processSseLine(sseBuffer);
           }
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-
-              if (data.type === "status") {
-                setPipelineStage(data.stage);
-                setPipelineMsg(data.message);
-              }
-
-              if (data.type === "worksheet_state") {
-                setWorksheetState(data.worksheet);
-              }
-
-              if (data.type === "products") {
-                assistantProducts = data.items;
-                upsertAssistant();
-              }
-
-              if (data.type === "token") {
-                assistantContent += data.content;
-                upsertAssistant();
-              }
-            } catch (err) {
-              /* ignore malformed chunks */
-            }
-          }
+          break;
         }
       }
     } catch (err) {

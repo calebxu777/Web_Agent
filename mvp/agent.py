@@ -127,7 +127,10 @@ class PipelineStage:
     SOURCING_WEB = ("sourcing_web", "Searching the web via Google Shopping...")
     RERANKING = ("reranking", "Ranking products by relevance...")
     RECALLING_MEMORY = ("recalling_memory", "Remembering your preferences...")
-    GENERATING = ("generating", "Generating your personalized recommendations...")
+    GENERATING_RESPONSE = ("generating", "Generating a response...")
+    GENERATING_RECOMMENDATIONS = ("generating", "Generating recommendations...")
+    GENERATING_PERSONALIZED = ("generating", "Generating your personalized recommendations...")
+    GENERATING_COMPARISON = ("generating", "Generating a comparison...")
 
     @staticmethod
     def to_sse(stage: tuple[str, str]) -> str:
@@ -195,6 +198,30 @@ class MVPCommerceAgent:
         if not self._worksheet_events_enabled():
             return None
         return json.dumps(self.worksheet_engine.build_event_payload(definition, instance))
+
+    @staticmethod
+    def _is_named_user(user_id: str) -> bool:
+        normalized = (user_id or "").strip()
+        return bool(normalized and not normalized.startswith("anon_"))
+
+    def _generation_stage(
+        self,
+        user_id: str,
+        *,
+        mode: str = "response",
+    ) -> tuple[str, str]:
+        if mode == "comparison":
+            return PipelineStage.GENERATING_COMPARISON
+        if mode == "recommendations":
+            return (
+                PipelineStage.GENERATING_PERSONALIZED
+                if self._is_named_user(user_id)
+                else PipelineStage.GENERATING_RECOMMENDATIONS
+            )
+        return PipelineStage.GENERATING_RESPONSE
+
+    def _rerank_window_size(self) -> int:
+        return max(self.ac.top_k_reranked, self.ac.top_k_final * 3)
 
     def _ensure_preference_services(self) -> None:
         if not self._preferences_enabled():
@@ -1114,7 +1141,7 @@ class MVPCommerceAgent:
             chat_history = self.memory.get_chat_history(session_id)
 
         t0 = time.time()
-        yield PipelineStage.to_sse(PipelineStage.GENERATING)
+        yield PipelineStage.to_sse(self._generation_stage(user_id, mode="response"))
         full_response = ""
         async for token in self.master_brain.general_chat_stream(message, chat_history, memory_context):
             full_response += token
@@ -1141,7 +1168,7 @@ class MVPCommerceAgent:
         if len(comparison_products) < 2:
             clarification = self.worksheet_engine.build_compare_clarification_question(worksheet_instance)
             t0 = time.time()
-            yield PipelineStage.to_sse(PipelineStage.GENERATING)
+            yield PipelineStage.to_sse(self._generation_stage(user_id, mode="comparison"))
             yield json.dumps({"type": "token", "content": clarification})
             self._log_stage("generation", t0)
             self._record_assistant_message(session_id, clarification)
@@ -1166,7 +1193,7 @@ class MVPCommerceAgent:
         )
 
         t0 = time.time()
-        yield PipelineStage.to_sse(PipelineStage.GENERATING)
+        yield PipelineStage.to_sse(self._generation_stage(user_id, mode="comparison"))
         full_response = ""
         if self._acts_enabled():
             from src.agent_acts import ActBuilder
@@ -1250,7 +1277,7 @@ class MVPCommerceAgent:
                     worksheet_instance,
                 )
                 t0 = time.time()
-                yield PipelineStage.to_sse(PipelineStage.GENERATING)
+                yield PipelineStage.to_sse(self._generation_stage(user_id, mode="recommendations"))
                 yield json.dumps({"type": "token", "content": clarification})
                 self._log_stage("generation", t0)
                 self._record_assistant_message(session_id, clarification)
@@ -1283,20 +1310,21 @@ class MVPCommerceAgent:
 
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.RERANKING)
+        rerank_window = self._rerank_window_size()
         fused_candidates = self._fuse_ranked_product_lists(
             [("local", local_products), ("web", web_products)],
-            limit=max(self.ac.top_k_reranked, self.ac.top_k_final * 3),
+            limit=rerank_window,
         )
         fused_candidates = self._apply_keyword_type_boosts(
             search_query_text,
             fused_candidates,
-            limit=max(self.ac.top_k_reranked, self.ac.top_k_final * 3),
+            limit=rerank_window,
         )
         preference_context = self._get_preference_context(user_id, session_id)
         reranked = self.router.rerank(
             search_query_text,
             fused_candidates,
-            top_k=self.ac.top_k_final,
+            top_k=rerank_window,
             preference_context=preference_context,
         )
         reranked = self._prioritize_products_with_images(reranked)
@@ -1329,7 +1357,7 @@ class MVPCommerceAgent:
         yield json.dumps({"type": "products", "items": frontend_items, "tags": query.tags, "filters": query.filters})
 
         t0 = time.time()
-        yield PipelineStage.to_sse(PipelineStage.GENERATING)
+        yield PipelineStage.to_sse(self._generation_stage(user_id, mode="recommendations"))
         if not frontend_items:
             no_results = (
                 "I couldn't find strong matches in the current catalog for that request. "
@@ -1458,21 +1486,22 @@ class MVPCommerceAgent:
 
         combined = self._fuse_ranked_product_lists(
             [("local", products), ("web", web_products)],
-            limit=max(self.ac.top_k_reranked, self.ac.top_k_final * 3),
+            limit=self._rerank_window_size(),
         )
         combined = self._apply_keyword_type_boosts(
             caption or message,
             combined,
-            limit=max(self.ac.top_k_reranked, self.ac.top_k_final * 3),
+            limit=self._rerank_window_size(),
         )
 
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.RERANKING)
+        rerank_window = self._rerank_window_size()
         preference_context = self._get_preference_context(user_id, session_id)
         reranked = self.router.rerank(
             caption or message,
             combined,
-            top_k=self.ac.top_k_final,
+            top_k=rerank_window,
             preference_context=preference_context,
         )
         reranked = self._prioritize_products_with_images(reranked)
@@ -1490,7 +1519,7 @@ class MVPCommerceAgent:
         yield json.dumps({"type": "products", "items": frontend_items, "tags": tags, "caption": caption})
 
         t0 = time.time()
-        yield PipelineStage.to_sse(PipelineStage.GENERATING)
+        yield PipelineStage.to_sse(self._generation_stage(user_id, mode="recommendations"))
         synth_query = f"The user uploaded an image that shows: {caption}."
         if message:
             synth_query += f" They also said: {message}"
