@@ -21,19 +21,21 @@ export default function Home() {
   const [nickname, setNickname] = useState("");
   const [showNicknameModal, setShowNicknameModal] = useState(false);
 
-  // Load nickname from localStorage on mount
+  // Keep nickname only for the current browser session.
   useEffect(() => {
-    const saved = localStorage.getItem("commerce_nickname");
+    localStorage.removeItem("commerce_nickname");
+    const saved = sessionStorage.getItem("commerce_nickname");
     if (saved) setNickname(saved);
   }, []);
 
   const handleNicknameSave = (name, status) => {
     if (name) {
       setNickname(name);
-      localStorage.setItem("commerce_nickname", name);
+      sessionStorage.setItem("commerce_nickname", name);
     } else {
       // Cleared
       setNickname("");
+      sessionStorage.removeItem("commerce_nickname");
       localStorage.removeItem("commerce_nickname");
     }
   };
