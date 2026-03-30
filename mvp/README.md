@@ -40,6 +40,8 @@ Preference memory is intentionally lightweight. Turn-level preferences inferred 
 
 This is the current repo-level path for running and testing the MVP backend.
 
+For a dedicated endpoint-by-endpoint API reference, see [AGENT_API.md](./AGENT_API.md).
+
 ### 1. Configure the MVP
 
 From the repo root, copy [`mvp/.env.example`](.env.example) to `mvp/.env` and fill in your real keys.
