@@ -7,6 +7,7 @@ import Header from "@/components/Header";
 import StatusPipeline from "@/components/StatusPipeline";
 import SearchToggle from "@/components/SearchToggle";
 import NicknameModal from "@/components/NicknameModal";
+import WorksheetPanel from "@/components/WorksheetPanel";
 
 export default function Home() {
   const [messages, setMessages] = useState([]);
@@ -14,6 +15,7 @@ export default function Home() {
   const [pipelineMsg, setPipelineMsg] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [worksheetState, setWorksheetState] = useState(null);
 
   // Nickname state
   const [nickname, setNickname] = useState("");
@@ -46,6 +48,7 @@ export default function Home() {
     setIsTyping(true);
     setPipelineStage("cold_start");
     setPipelineMsg("Loading the model for cold start...");
+    setWorksheetState(null);
 
     try {
       const response = await fetch("/api/chat", {
@@ -108,6 +111,10 @@ export default function Home() {
                 setPipelineMsg(data.message);
               }
 
+              if (data.type === "worksheet_state") {
+                setWorksheetState(data.worksheet);
+              }
+
               if (data.type === "products") {
                 assistantProducts = data.items;
                 upsertAssistant();
@@ -149,6 +156,7 @@ export default function Home() {
         onOpenNickname={() => setShowNicknameModal(true)}
       />
       {pipelineStage && <StatusPipeline stage={pipelineStage} message={pipelineMsg} />}
+      <WorksheetPanel worksheet={worksheetState} />
       <div
         style={{
           position: "sticky",

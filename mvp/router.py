@@ -15,6 +15,7 @@ import re
 
 import httpx
 
+from mvp.preference_models import TurnAnalysisResult
 from src.schema import DecomposedQuery, IntentType
 
 
@@ -42,6 +43,50 @@ Respond with ONLY a JSON object:
   "tags": ["tag1", "tag2"],
   "filters": {"price_max": 200, "color": "red"},
   "rewritten_query": "red winter jacket under $200"
+}"""
+
+TURN_ANALYSIS_SYSTEM_PROMPT = """You are a commerce turn analyzer. Analyze the user's message and return a single JSON object with:
+- intent: one of general_talk, text_search, image_search, web_search
+- tags: semantic shopping descriptors
+- filters: hard constraints using only these keys when present: price_max, price_min, brand, color, category, size
+- rewritten_query: a clean search-oriented query string when the message is product-seeking, otherwise an empty string
+- preferences: stable reusable user preferences or durable constraints
+
+Supported preference kinds:
+- color
+- brand
+- size
+- fit
+- style
+- material
+- budget_max
+- budget_min
+- category
+
+Rules:
+- Prefer precision over recall for preferences.
+- Return preferences as an empty list when uncertain.
+- Only include negative preferences when clearly stated.
+- Normalize preference string values to short lowercase forms when possible.
+- Budgets in preferences must be numbers without currency symbols.
+- If the message is general conversation, keep tags empty, filters empty, rewritten_query empty.
+- If image_attached is true, set intent to image_search unless the user is clearly asking for something else.
+
+Return ONLY JSON with this shape:
+{
+  "intent": "text_search",
+  "tags": ["casual", "spring"],
+  "filters": {"color": "red", "price_max": 120},
+  "rewritten_query": "casual red spring jacket under $120",
+  "preferences": [
+    {
+      "kind": "color",
+      "value": "red",
+      "polarity": "positive",
+      "confidence": 0.92,
+      "source_text": "I like red"
+    }
+  ]
 }"""
 
 
@@ -156,64 +201,96 @@ class MVPRouter:
         return response.json()["choices"][0]["message"]["content"]
 
     def detect_intent(self, user_message: str, has_image: bool = False) -> IntentType:
-        if has_image:
-            return IntentType.IMAGE_SEARCH
-
-        heuristic = self._heuristic_intent(user_message)
-        if heuristic is not None:
-            return heuristic
-
-        try:
-            raw = self._chat_completion(
-                INTENT_SYSTEM_PROMPT,
-                user_message,
-                model=self.model_name,
-                max_tokens=64,
-            )
-            parsed = self._extract_json(raw)
-            return IntentType(parsed.get("intent", "general_talk"))
-        except Exception:
-            return IntentType.GENERAL_TALK
+        return self.analyze_turn(user_message, has_image=has_image).intent
 
     def decompose_query(self, user_message: str) -> DecomposedQuery:
+        return self.analyze_turn(user_message).to_decomposed_query(user_message)
+
+    def analyze_turn(self, user_message: str, has_image: bool = False) -> TurnAnalysisResult:
+        message = user_message.strip()
+        heuristic = IntentType.IMAGE_SEARCH if has_image else self._heuristic_intent(user_message)
+
+        if not message:
+            return TurnAnalysisResult(intent=heuristic or IntentType.GENERAL_TALK)
+
         try:
             raw = self._chat_completion(
-                DECOMPOSITION_SYSTEM_PROMPT,
-                user_message,
+                TURN_ANALYSIS_SYSTEM_PROMPT,
+                json.dumps(
+                    {
+                        "message": user_message,
+                        "image_attached": has_image,
+                    }
+                ),
                 model=self.model_name,
-                max_tokens=256,
+                max_tokens=384,
             )
             parsed = self._extract_json(raw)
-            return DecomposedQuery(
-                intent=IntentType.TEXT_SEARCH,
-                original_query=user_message,
-                tags=parsed.get("tags", []),
-                filters=parsed.get("filters", {}),
-                rewritten_query=parsed.get("rewritten_query", user_message),
-            )
+            result = TurnAnalysisResult.model_validate(parsed)
+            if has_image:
+                result.intent = IntentType.IMAGE_SEARCH
+            return result
         except Exception:
-            return DecomposedQuery(
-                intent=IntentType.TEXT_SEARCH,
-                original_query=user_message,
+            fallback_intent = heuristic or IntentType.GENERAL_TALK
+            rewritten_query = user_message if fallback_intent in {
+                IntentType.TEXT_SEARCH,
+                IntentType.WEB_SEARCH,
+                IntentType.IMAGE_SEARCH,
+            } else ""
+            return TurnAnalysisResult(
+                intent=fallback_intent,
                 tags=[],
                 filters={},
-                rewritten_query=user_message,
+                rewritten_query=rewritten_query,
+                preferences=[],
             )
 
-    def rerank(self, query: str, products: list[dict], top_k: int = 10) -> list[dict]:
+    def build_rerank_prompt(
+        self,
+        query: str,
+        products: list[dict],
+        top_k: int = 10,
+        preference_context: str = "",
+    ) -> str:
         product_summaries = []
         for i, product in enumerate(products):
             summary = f"[{i}] {product.get('title', '')} | ${product.get('price', 'N/A')} | {product.get('brand', '')}"
             product_summaries.append(summary)
 
-        rerank_prompt = f"""Given the search query: "{query}"
+        preference_section = ""
+        if preference_context:
+            preference_section = f"""{preference_context}
 
-Rank the following products by relevance. Return ONLY a JSON array of the top {top_k} indices, most relevant first.
+Ranking rule:
+- Prioritize relevance to the current request first.
+- Use stored preferences only as a secondary signal.
+- Do not override explicit constraints in the current query.
+- If the current query conflicts with saved preferences, follow the current query.
+
+"""
+
+        return f"""Given the search query: "{query}"
+
+{preference_section}Rank the following products by relevance. Return ONLY a JSON array of the top {top_k} indices, most relevant first.
 
 Products:
 {chr(10).join(product_summaries)}
 
 Response format: [3, 7, 1, ...]"""
+
+    def rerank(
+        self,
+        query: str,
+        products: list[dict],
+        top_k: int = 10,
+        preference_context: str = "",
+    ) -> list[dict]:
+        rerank_prompt = self.build_rerank_prompt(
+            query=query,
+            products=products,
+            top_k=top_k,
+            preference_context=preference_context,
+        )
 
         try:
             raw = self._chat_completion(

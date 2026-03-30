@@ -12,6 +12,30 @@ The MVP backend will automatically read `mvp/.env` if that file exists.
 - use GCS-backed catalog/images as the default data source
 - use SerpApi Google Shopping for external web product results
 
+## MVP Design Overview
+
+The MVP keeps the main `src/` backend untouched and concentrates the experimental serving path inside `mvp/`. The design goal is to preserve the same high-level compound-agent flow while making it easier to swap in API models, iterate on orchestration, and test product-search behaviors without retraining local models first.
+
+### Turn Analysis And Routing
+
+Every user turn starts with a router pass in `router.py`. That pass classifies the turn, decomposes the request into structured retrieval fields, and can optionally infer lightweight user preferences in the same LLM call. This keeps preference inference on the same latency budget as routing instead of paying for a second extraction request.
+
+### Retrieval And Result Fusion
+
+`agent.py` orchestrates local retrieval from SQLite plus LanceDB, optional Google Shopping web retrieval through SerpApi, and product normalization into a single response shape for the frontend. The current-turn structured filters always take precedence, and the reranker can optionally see a compact preference context so long-term tastes help sort candidates without overriding the user’s explicit request.
+
+### Worksheet State
+
+When worksheets are enabled, the MVP can keep session-scoped search state across turns. That lets the backend ask for missing constraints, hold onto compare candidates, and continue the same shopping task instead of treating each message as a fully independent search.
+
+### Agent Acts
+
+When agent acts are enabled, the final response can be generated through structured output acts such as recommend, compare, or report. This gives the response layer tighter formatting control while still using the same retrieval and routing backbone underneath.
+
+### Preference Memory
+
+Preference memory is intentionally lightweight. Turn-level preferences inferred during routing are merged into a session profile in Redis, and `POST /api/session/finalize` can persist the merged profile into SQLite for longer-term reuse by nickname or user identity. The preference layer is designed to influence reranking and continuity, not to replace explicit query constraints from the current turn.
+
 ## Key Files
 
 - [`api.py`](api.py): FastAPI entrypoint for the MVP backend
@@ -27,11 +51,18 @@ Start by copying [`mvp/.env.example`](.env.example) to `mvp/.env` and filling in
 - `MVP_MASTER_BRAIN_MODEL` (optional, default: `gpt-4o-mini`)
 - `MVP_ROUTER_MODEL` (optional, default: `gpt-4o-mini`)
 - `MVP_RERANKER_MODEL` (optional, default: same as router)
+- `MVP_USE_WORKSHEETS` (optional: `true` or `false`; default: `false`)
+- `MVP_USE_AGENT_ACTS` (optional: `true` or `false`; default: `false`)
+- `MVP_ACT_MODE` (optional: `dynamic` or `hardcoded`; default: `dynamic` when acts are enabled)
 - `SERPAPI_API_KEY`
 - `SERPAPI_MOCK_RESULTS_PATH` for mock web-search testing
 - `SERPAPI_LOCATION`, `SERPAPI_GL`, `SERPAPI_HL` (optional)
 - `MVP_WEB_NUM_RESULTS` (optional, default: `1`)
 - `MVP_USE_MEMORY` (optional, default: `true`)
+- `MVP_USE_PREFERENCE_INFERENCE` (optional, default: `false`)
+- `MVP_USE_PREFERENCE_RERANKING` (optional, default: `false`)
+- `MVP_PREFERENCE_REDIS_TTL_SECONDS` (optional, default: `3600`)
+- `MVP_USER_PREFERENCES_DB_PATH` (optional, default: `data/processed/user_preferences.db`)
 - `MVP_GCS_CATALOG_DB_URL` (optional, defaults to the GCS `catalog.db` path)
 - `MVP_GCS_LANCEDB_PUBLIC_PREFIX` (optional, defaults to the public `data/processed/lancedb/` prefix in the same bucket)
 - `MVP_GCS_LANCEDB_MANIFEST_URL` (optional, overrides prefix listing with an explicit JSON manifest of LanceDB files)
@@ -80,6 +111,7 @@ Notes:
 - `./data` is mounted into the container, so hydrated `catalog.db` and LanceDB caches persist on the VM
 - Hugging Face and Torch caches are stored in Docker volumes to avoid repeated model downloads
 - this first pass keeps embedders in the backend container; later we can split out `vision`, `handyman`, and OSS LLM services if you want cleaner isolation
+- for A/B testing on the VM, flip `MVP_USE_WORKSHEETS` and `MVP_USE_AGENT_ACTS` in `mvp/.env`, then restart the MVP backend container
 
 ## Run With Mock Web Search
 
@@ -95,7 +127,21 @@ $env:SERPAPI_MOCK_RESULTS_PATH="scripts/test/mock_serpapi_google_shopping.json"
 - the MVP backend can also hydrate the local LanceDB cache from GCS automatically when `data/processed/lancedb` is missing
 - product images are served as public GCS URLs in MVP responses
 - Redis is still required if `MVP_USE_MEMORY=true`
+- when preference inference is enabled, extracted turn-level preferences are cached in Redis under the active session
+- when session finalization is called, merged durable preferences are stored in `user_preferences.db`
 - the main backend in `src/` is unchanged
+
+## Preference Memory MVP
+
+The MVP can now do a lightweight preference pass without changing worksheet state:
+
+- when preference inference is enabled, the router runs a single turn-analysis LLM call that returns intent, decomposition fields, and inferred preferences together
+- the backend merges those inferred preferences into the session store before continuing the rest of the turn
+- extracted preferences are merged into a session-scoped Redis cache
+- search reranking can inject a compact preference context block into the reranker prompt
+- calling `POST /api/session/finalize` persists the merged session profile into SQLite and clears the session cache
+
+The reranker keeps current-turn constraints above stored preferences. If the user normally likes red but asks for black shirts right now, the reranker prompt explicitly tells the model to follow the current query.
 
 ## LanceDB Manifest Format
 

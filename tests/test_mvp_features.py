@@ -1,8 +1,12 @@
 import json
 import unittest
+import asyncio
+from unittest.mock import patch
 
 from mvp.agent import MVPCommerceAgent, MVPConfig, PipelineStage
+from mvp.api import resolve_env_flag, resolve_mvp_act_mode
 from mvp.router import MVPRouter
+from mvp.worksheet_store import InMemoryWorksheetStore
 from src.schema import DecomposedQuery, IntentType
 
 
@@ -23,7 +27,72 @@ class FakeSQLite:
         return ["Clothing & Accessories", "Electronics"]
 
 
+class FakeRouter:
+    def __init__(self, query: DecomposedQuery):
+        self.query = query
+
+    def decompose_query(self, _message: str) -> DecomposedQuery:
+        return self.query
+
+    def rerank(
+        self,
+        _query: str,
+        products: list[dict],
+        top_k: int = 10,
+        preference_context: str = "",
+    ) -> list[dict]:
+        return products[:top_k]
+
+
+class FakeMasterBrain:
+    async def grounded_synthesize_stream(
+        self,
+        _query,
+        _acts,
+        _chat_history=None,
+        _memory_context="",
+        extra_instructions="",
+    ):
+        for token in ["Here is ", "the comparison."]:
+            yield token
+
+    async def synthesize_stream(
+        self,
+        _query,
+        _products,
+        _chat_history=None,
+        _memory_context="",
+        extra_instructions="",
+    ):
+        for token in ["Here is ", "a result."]:
+            yield token
+
+
+class FakeRetriever:
+    def search_text(self, _query):
+        return [
+            {
+                "product_id": "p1",
+                "title": "Budget Jacket",
+                "price": 99.0,
+                "brand": "Test Brand",
+            }
+        ]
+
+
 class MVPFeatureTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._worksheet_store_patch = patch(
+            "mvp.agent.build_worksheet_store",
+            side_effect=lambda _config: InMemoryWorksheetStore(),
+        )
+        cls._worksheet_store_patch.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._worksheet_store_patch.stop()
+
     def setUp(self):
         self.agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig())
         self.agent.sqlite = FakeSQLite()
@@ -115,10 +184,161 @@ class MVPFeatureTests(unittest.TestCase):
         config = MVPConfig()
         self.assertEqual(config.web_num_results, 1)
 
+    def test_resolve_env_flag_accepts_common_truthy_values(self):
+        self.assertTrue(resolve_env_flag("true"))
+        self.assertTrue(resolve_env_flag("YES"))
+        self.assertFalse(resolve_env_flag("false"))
+        self.assertFalse(resolve_env_flag(None))
+
+    def test_resolve_mvp_act_mode_accepts_known_values(self):
+        self.assertEqual(resolve_mvp_act_mode("dynamic", use_agent_acts=True), "dynamic")
+        self.assertEqual(resolve_mvp_act_mode("hardcoded", use_agent_acts=True), "hardcoded")
+
+    def test_resolve_mvp_act_mode_falls_back_based_on_switch(self):
+        self.assertEqual(resolve_mvp_act_mode("something-else", use_agent_acts=False), "off")
+        self.assertEqual(resolve_mvp_act_mode(None, use_agent_acts=False), "off")
+        self.assertEqual(resolve_mvp_act_mode(None, use_agent_acts=True), "dynamic")
+        self.assertEqual(resolve_mvp_act_mode("off", use_agent_acts=True), "dynamic")
+
     def test_pipeline_stage_serializes_to_sse_status_message(self):
         payload = json.loads(PipelineStage.to_sse(PipelineStage.SOURCING_WEB))
         self.assertEqual(payload["type"], "status")
         self.assertEqual(payload["stage"], "sourcing_web")
+
+    def test_text_search_worksheet_asks_for_product_type_before_retrieval(self):
+        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_worksheets=True))
+        agent.sqlite = FakeSQLite()
+        agent.router = FakeRouter(
+            DecomposedQuery(
+                intent=IntentType.TEXT_SEARCH,
+                original_query="show me something cheaper",
+                tags=["cheaper"],
+                filters={"price_max": 100},
+                rewritten_query="something cheaper under 100",
+            )
+        )
+
+        async def collect_events():
+            return [
+                json.loads(event)
+                async for event in agent._workflow_text_search(
+                    user_id="user-1",
+                    session_id="session-1",
+                    message="show me something cheaper",
+                    include_web=False,
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+
+        token_events = [event for event in events if event.get("type") == "token"]
+        worksheet_events = [event for event in events if event.get("type") == "worksheet_state"]
+
+        self.assertTrue(worksheet_events)
+        self.assertEqual(worksheet_events[-1]["worksheet"]["status"], "awaiting_input")
+        self.assertEqual(token_events[-1]["content"], "What kind of product are you shopping for right now?")
+
+    def test_compare_workflow_uses_last_search_results(self):
+        agent = MVPCommerceAgent(
+            TEST_CONFIG,
+            MVPConfig(use_worksheets=True, use_agent_acts=True, act_mode="dynamic"),
+        )
+        search_definition = agent.worksheet_registry.get("product_search")
+        search_instance = agent.worksheet_engine.create_instance(search_definition)
+        search_instance.result_refs["last_products"] = [
+            {"product_id": "p1", "title": "First Jacket", "price": 100.0},
+            {"product_id": "p2", "title": "Second Jacket", "price": 120.0},
+            {"product_id": "p3", "title": "Third Jacket", "price": 150.0},
+        ]
+        agent.worksheet_store.save("session-compare", search_instance)
+        agent.master_brain = FakeMasterBrain()
+
+        async def collect_events():
+            return [
+                json.loads(event)
+                async for event in agent._workflow_compare(
+                    user_id="user-1",
+                    session_id="session-compare",
+                    message="compare 1 and 2",
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+
+        worksheet_events = [event for event in events if event.get("type") == "worksheet_state"]
+        product_events = [event for event in events if event.get("type") == "products"]
+        token_events = [event for event in events if event.get("type") == "token"]
+
+        self.assertTrue(worksheet_events)
+        self.assertEqual(worksheet_events[-1]["worksheet"]["name"], "compare_products")
+        self.assertTrue(product_events)
+        self.assertEqual(len(product_events[-1]["items"]), 2)
+        self.assertEqual("".join(event["content"] for event in token_events), "Here is the comparison.")
+
+    def test_text_search_without_worksheets_skips_clarification(self):
+        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_worksheets=False))
+        agent.sqlite = FakeSQLite()
+        agent.router = FakeRouter(
+            DecomposedQuery(
+                intent=IntentType.TEXT_SEARCH,
+                original_query="show me something cheaper",
+                tags=["cheaper"],
+                filters={"price_max": 100},
+                rewritten_query="something cheaper under 100",
+            )
+        )
+        agent.retriever = FakeRetriever()
+        agent.master_brain = FakeMasterBrain()
+
+        async def collect_events():
+            return [
+                json.loads(event)
+                async for event in agent._workflow_text_search(
+                    user_id="user-1",
+                    session_id="session-no-worksheet",
+                    message="show me something cheaper",
+                    include_web=False,
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+
+        worksheet_events = [event for event in events if event.get("type") == "worksheet_state"]
+        product_events = [event for event in events if event.get("type") == "products"]
+        token_events = [event for event in events if event.get("type") == "token"]
+
+        self.assertFalse(worksheet_events)
+        self.assertTrue(product_events)
+        self.assertEqual("".join(event["content"] for event in token_events), "Here is a result.")
+
+    def test_compare_workflow_without_agent_acts_uses_plain_synthesis(self):
+        agent = MVPCommerceAgent(
+            TEST_CONFIG,
+            MVPConfig(use_worksheets=True, use_agent_acts=False, act_mode="off"),
+        )
+        search_definition = agent.worksheet_registry.get("product_search")
+        search_instance = agent.worksheet_engine.create_instance(search_definition)
+        search_instance.result_refs["last_products"] = [
+            {"product_id": "p1", "title": "First Jacket", "price": 100.0},
+            {"product_id": "p2", "title": "Second Jacket", "price": 120.0},
+        ]
+        agent.worksheet_store.save("session-plain-compare", search_instance)
+        agent.master_brain = FakeMasterBrain()
+
+        async def collect_events():
+            return [
+                json.loads(event)
+                async for event in agent._workflow_compare(
+                    user_id="user-1",
+                    session_id="session-plain-compare",
+                    message="compare 1 and 2",
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        token_events = [event for event in events if event.get("type") == "token"]
+
+        self.assertEqual("".join(event["content"] for event in token_events), "Here is a result.")
 
 
 if __name__ == "__main__":

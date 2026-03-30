@@ -146,6 +146,12 @@ class AgentConfig:
     # True:  Include metadata in SSE events (timing, source, model used).
     include_debug_metadata: bool = False
 
+    # ---- Grounded Response Acts ----
+    # "hardcoded": Fixed act combo (Report+Recommend+Style). Best for OSS models.
+    # "dynamic":   Selects acts based on user intent. Best for capable API LLMs.
+    # "off":       Bypass acts, use original free-form synthesis.
+    act_mode: str = "hardcoded"
+
     def resolve_image_url(self, relative_path: str) -> str:
         """
         Resolve a product image path to a full URL based on the active storage provider.
@@ -649,11 +655,34 @@ class CommerceAgent:
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.GENERATING)
         full_response = ""
-        async for token in self.master_brain.synthesize_stream(
-            message, reranked, chat_history, memory_context
-        ):
-            full_response += token
-            yield json.dumps({"type": "token", "content": token})
+        if self.ac.act_mode != "off":
+            from src.agent_acts import select_acts
+
+            source = "catalog + web" if include_web else "local catalog"
+            acts = select_acts(
+                mode=self.ac.act_mode,
+                message=message,
+                products=reranked[:self.ac.top_k_final],
+                source=source,
+            )
+            if acts:
+                async for token in self.master_brain.grounded_synthesize_stream(
+                    message, acts, chat_history, memory_context
+                ):
+                    full_response += token
+                    yield json.dumps({"type": "token", "content": token})
+            else:
+                async for token in self.master_brain.synthesize_stream(
+                    message, reranked, chat_history, memory_context
+                ):
+                    full_response += token
+                    yield json.dumps({"type": "token", "content": token})
+        else:
+            async for token in self.master_brain.synthesize_stream(
+                message, reranked, chat_history, memory_context
+            ):
+                full_response += token
+                yield json.dumps({"type": "token", "content": token})
         self._log_stage("generation", t0)
 
         if self.memory:
@@ -802,11 +831,35 @@ class CommerceAgent:
             synth_query += f" They also said: {message}"
 
         full_response = ""
-        async for token in self.master_brain.synthesize_stream(
-            synth_query, reranked, chat_history, memory_context
-        ):
-            full_response += token
-            yield json.dumps({"type": "token", "content": token})
+        if self.ac.act_mode != "off":
+            from src.agent_acts import select_acts
+
+            source = "image search + web" if include_web else "image search"
+            acts = select_acts(
+                mode=self.ac.act_mode,
+                message=synth_query,
+                products=reranked[:self.ac.top_k_final],
+                source=source,
+                is_image_search=True,
+            )
+            if acts:
+                async for token in self.master_brain.grounded_synthesize_stream(
+                    synth_query, acts, chat_history, memory_context
+                ):
+                    full_response += token
+                    yield json.dumps({"type": "token", "content": token})
+            else:
+                async for token in self.master_brain.synthesize_stream(
+                    synth_query, reranked, chat_history, memory_context
+                ):
+                    full_response += token
+                    yield json.dumps({"type": "token", "content": token})
+        else:
+            async for token in self.master_brain.synthesize_stream(
+                synth_query, reranked, chat_history, memory_context
+            ):
+                full_response += token
+                yield json.dumps({"type": "token", "content": token})
         self._log_stage("generation", t0)
 
         if self.memory:

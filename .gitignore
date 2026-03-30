@@ -4,9 +4,17 @@
 data/raw/
 data/processed/images/
 data/processed/lancedb/
+data/processed/test_user_prefs*.db
+data/processed/test_user_preferences*.db
+data/test_runtime/
 data.tar.gz
 data/*.db
 data/embed_log*.txt
+
+
+genieworksheet/
+
+
 
 # 66MB — stored on GCS instead
 data/processed/catalog.db
@@ -70,3 +78,11 @@ mvp_server*.out.log
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ====================
+# Local planning / scratch docs
+# ====================
+implement.md
+preference_plan.md
+
+

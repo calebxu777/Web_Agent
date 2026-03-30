@@ -1,0 +1,26 @@
+name: compare_products
+description: Structured worksheet for comparing products from the latest search results.
+trigger_intents:
+  - text_search
+  - web_search
+actions:
+  - load_selected_products
+  - build_compare_acts
+  - generate_comparison_response
+completion_rule: comparison_ready
+priority: 20
+fields:
+  - name: selected_product_ids
+    type: list[str]
+    kind: input
+    required: true
+    description: The products selected for comparison.
+    question: Tell me which results to compare, like compare 1 and 2.
+  - name: comparison_dimensions
+    type: list[str]
+    kind: input
+    description: Which dimensions should be emphasized in the comparison.
+  - name: source_label
+    type: str
+    kind: output
+    description: Human-readable label for where the compared products came from.

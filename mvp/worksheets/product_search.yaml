@@ -1,0 +1,62 @@
+name: product_search
+description: Structured worksheet for multi-turn commerce product search.
+trigger_intents:
+  - text_search
+  - web_search
+actions:
+  - decompose_query
+  - search_local_catalog
+  - search_web_if_allowed
+  - rerank_results
+  - build_grounded_response
+completion_rule: all_required_filled
+priority: 10
+fields:
+  - name: product_type
+    type: str
+    kind: input
+    required: true
+    description: The type of product the customer wants to shop for.
+    question: What kind of product are you shopping for right now?
+  - name: style_tags
+    type: list[str]
+    kind: input
+    description: Style or use-case descriptors for retrieval.
+  - name: price_min
+    type: float
+    kind: input
+    description: Minimum budget when the user provides one.
+  - name: price_max
+    type: float
+    kind: input
+    description: Maximum budget when the user provides one.
+  - name: brand
+    type: str
+    kind: input
+    description: Preferred brand.
+  - name: color
+    type: str
+    kind: input
+    description: Preferred color.
+  - name: size
+    type: str
+    kind: input
+    predicate: values.get("product_type") in ["jacket", "coat", "blazer", "shacket", "parka", "hoodie", "windbreaker", "bomber", "shirt", "dress", "shoe", "sneaker", "boot", "jean", "pant", "skirt", "sweater"]
+    description: Size when the product type is apparel or footwear.
+  - name: use_case
+    type: str
+    kind: input
+    description: How the customer plans to use the product.
+  - name: web_search_enabled
+    type: bool
+    kind: internal
+    description: Whether the current turn should include web products.
+    default: false
+  - name: rewritten_query
+    type: str
+    kind: output
+    description: Query rebuilt from the active worksheet state.
+  - name: retrieval_tags
+    type: list[str]
+    kind: output
+    description: Tags carried into retrieval and reranking.

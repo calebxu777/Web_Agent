@@ -20,9 +20,23 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
+from mvp.preference_models import (
+    TurnAnalysisResult,
+    build_preference_context,
+)
+from mvp.preference_store import (
+    PreferenceStore,
+    SQLitePreferenceProfileStore,
+    build_session_preference_store,
+)
 from mvp.router import MVPRouter
+from mvp.worksheet_engine import WorksheetEngine
+from mvp.worksheet_models import WorksheetDefinition, WorksheetInstance
+from mvp.worksheet_registry import WorksheetRegistry
+from mvp.worksheet_router import WorksheetRouter
+from mvp.worksheet_store import InMemoryWorksheetStore, build_worksheet_store
 from src.master_brain import MasterBrain
-from src.schema import ChatMessage, IntentType
+from src.schema import ChatMessage, DecomposedQuery, IntentType
 
 
 @dataclass
@@ -52,6 +66,10 @@ class MVPConfig:
     rrf_k: int = 60
 
     use_memory: bool = True
+    use_preference_inference: bool = False
+    use_preference_reranking: bool = False
+    preference_redis_ttl_seconds: int = 3600
+    user_preferences_db_path: str = "data/processed/user_preferences.db"
     image_storage_provider: str = "gcs"
     gcs_public_url: str = "https://storage.googleapis.com/web-agent-data-caleb-2026"
     catalog_db_url: str = "https://storage.googleapis.com/web-agent-data-caleb-2026/metadata/catalog.db"
@@ -60,6 +78,16 @@ class MVPConfig:
 
     log_timing: bool = False
     include_debug_metadata: bool = False
+
+    # ---- Worksheet/Acts Feature Switches ----
+    use_worksheets: bool = False
+    use_agent_acts: bool = False
+
+    # ---- Grounded Response Acts ----
+    # "dynamic":   Selects acts based on user intent. Best for capable API LLMs.
+    # "hardcoded": Fixed act combo (Report+Recommend+Style). Best for OSS models.
+    # "off":       Bypass acts, use original free-form synthesis.
+    act_mode: str = "off"
 
     def resolve_image_url(self, value: str) -> str:
         if not value:
@@ -72,6 +100,7 @@ class MVPConfig:
 class PipelineStage:
     COLD_START = ("cold_start", "Loading services for MVP cold start...")
     INTENT_DETECTION = ("intent_detection", "Understanding your request...")
+    PREPARING_COMPARE = ("preparing_compare", "Preparing a side-by-side comparison...")
     ANALYZING_IMAGE = ("analyzing_image", "Analyzing your image...")
     DECOMPOSING_QUERY = ("decomposing_query", "Breaking down your query...")
     SOURCING_LOCAL = ("sourcing_local", "Sourcing matches from catalog...")
@@ -103,12 +132,174 @@ class MVPCommerceAgent:
         self.image_pipeline = None
         self.memory = None
         self.web_pipeline = None
+        self.preference_store: PreferenceStore | None = None
+        self.worksheet_registry = WorksheetRegistry()
+        self.worksheet_router = WorksheetRouter(self.worksheet_registry)
+        self.worksheet_engine = WorksheetEngine()
+        self.worksheet_store = (
+            build_worksheet_store(config)
+            if self.ac.use_worksheets
+            else InMemoryWorksheetStore()
+        )
+        self._ensure_preference_services()
 
     def _log_stage(self, name: str, start: float):
         elapsed = time.time() - start
         self._stage_times[name] = elapsed
         if self.ac.log_timing:
             print(f"  [timing] {name}: {elapsed:.3f}s")
+
+    def _acts_enabled(self) -> bool:
+        return self.ac.use_agent_acts and self.ac.act_mode != "off"
+
+    def _preferences_enabled(self) -> bool:
+        return self.ac.use_preference_inference or self.ac.use_preference_reranking
+
+    def _ensure_preference_services(self) -> None:
+        if not self._preferences_enabled():
+            return
+
+        if self.preference_store is None:
+            self.preference_store = PreferenceStore(
+                session_store=build_session_preference_store(
+                    self.config,
+                    ttl_seconds=self.ac.preference_redis_ttl_seconds,
+                ),
+                durable_store=SQLitePreferenceProfileStore(
+                    db_path=self.ac.user_preferences_db_path,
+                ),
+            )
+
+    def _record_assistant_message(self, session_id: str, content: str) -> None:
+        if not self.memory:
+            return
+        self.memory.on_assistant_message(
+            session_id,
+            ChatMessage(role="assistant", content=content, timestamp=time.time()),
+        )
+
+    def _store_captured_preferences(
+        self,
+        user_id: str,
+        session_id: str,
+        preferences,
+    ) -> None:
+        if not self.ac.use_preference_inference:
+            return
+
+        self._ensure_preference_services()
+        if not self.preference_store or not preferences:
+            return
+
+        try:
+            self.preference_store.update_session_preferences(
+                user_id=user_id,
+                session_id=session_id,
+                preferences=preferences,
+            )
+        except Exception as exc:
+            if self.ac.log_timing:
+                print(f"  [preferences] capture skipped: {exc}")
+
+    def _store_preferences_from_analysis(
+        self,
+        user_id: str,
+        session_id: str,
+        turn_analysis: TurnAnalysisResult | None,
+    ) -> None:
+        if not turn_analysis:
+            return
+        self._store_captured_preferences(
+            user_id=user_id,
+            session_id=session_id,
+            preferences=turn_analysis.preferences,
+        )
+
+    def _get_preference_context(self, user_id: str, session_id: str) -> str:
+        if not self.ac.use_preference_reranking:
+            return ""
+
+        self._ensure_preference_services()
+        if not self.preference_store:
+            return ""
+
+        try:
+            profile = self.preference_store.get_combined_profile(user_id, session_id)
+            return build_preference_context(profile)
+        except Exception as exc:
+            if self.ac.log_timing:
+                print(f"  [preferences] context unavailable: {exc}")
+            return ""
+
+    @staticmethod
+    def _build_compare_synthesis_prompt(message: str, comparison_dimensions: list[str]) -> str:
+        dimensions = [value for value in comparison_dimensions if value]
+        if dimensions:
+            return (
+                "Compare the selected products side by side for the user. "
+                f"Focus on these dimensions: {', '.join(dimensions)}. "
+                f"User request: {message}"
+            )
+        return f"Compare the selected products side by side for the user. User request: {message}"
+
+    def _prepare_product_search_worksheet(
+        self,
+        session_id: str,
+        message: str,
+        include_web: bool,
+        decomposed: DecomposedQuery | None = None,
+    ) -> tuple[WorksheetDefinition, WorksheetInstance, DecomposedQuery]:
+        active_instance: WorksheetInstance | None = self.worksheet_store.get(session_id)
+        definition = self.worksheet_router.resolve(IntentType.TEXT_SEARCH, active_instance)
+        if definition is None or definition.name != "product_search":
+            definition = self.worksheet_registry.get("product_search")
+            active_instance = None
+
+        instance = active_instance
+        if not instance or instance.worksheet_name != definition.name:
+            instance = self.worksheet_engine.create_instance(definition)
+
+        decomposed = decomposed or self.router.decompose_query(message)
+        instance = self.worksheet_engine.apply_product_search_turn(
+            definition,
+            instance,
+            message,
+            decomposed,
+            include_web=include_web,
+        )
+        self.worksheet_store.save(session_id, instance)
+        return definition, instance, decomposed
+
+    def _should_handle_as_compare(
+        self,
+        message: str,
+        active_instance: WorksheetInstance | None,
+    ) -> bool:
+        if not active_instance:
+            return False
+        if active_instance.worksheet_name not in {"product_search", "compare_products"}:
+            return False
+        if not self.worksheet_engine.is_compare_message(message):
+            return False
+
+        source_products = []
+        if active_instance.worksheet_name == "compare_products":
+            source_products = list(active_instance.result_refs.get("source_products", []))
+        else:
+            source_products = list(active_instance.result_refs.get("last_products", []))
+
+        return len(source_products) >= 2
+
+    def _prepare_compare_worksheet(
+        self,
+        session_id: str,
+        message: str,
+    ) -> tuple[WorksheetDefinition, WorksheetInstance]:
+        active_instance: WorksheetInstance | None = self.worksheet_store.get(session_id)
+        definition = self.worksheet_registry.get("compare_products")
+        instance = self.worksheet_engine.create_compare_instance(definition, active_instance, message)
+        self.worksheet_store.save(session_id, instance)
+        return definition, instance
 
     def _ensure_catalog_db(self):
         db_path = Path(self.config["databases"]["sqlite"]["path"])
@@ -423,6 +614,10 @@ class MVPCommerceAgent:
         print(f"  API Base:          {ac.api_base}")
         print(f"  Use Web Search:    {ac.use_web_search}")
         print(f"  Use Memory:        {ac.use_memory}")
+        print(f"  Use Worksheets:    {ac.use_worksheets}")
+        print(f"  Use Agent Acts:    {ac.use_agent_acts} ({ac.act_mode})")
+        print(f"  Preference Infer:  {ac.use_preference_inference}")
+        print(f"  Preference Rerank: {ac.use_preference_reranking}")
         print(f"{'='*60}\n")
 
         from src.database import LanceDBCatalog, LanceDBMemoryStore, SQLiteCatalog
@@ -437,6 +632,7 @@ class MVPCommerceAgent:
         from src.retrieval import HybridRetriever
         from src.web_search import SerpApiGoogleShoppingSearcher, WebSearchPipeline
 
+        self._ensure_preference_services()
         self._ensure_catalog_db()
         self._ensure_lancedb()
 
@@ -548,22 +744,58 @@ class MVPCommerceAgent:
                 ChatMessage(role="user", content=message, timestamp=time.time()),
             )
 
+        active_instance = self.worksheet_store.get(session_id) if self.ac.use_worksheets else None
+        compare_override = (
+            self.ac.use_worksheets
+            and image_bytes is None
+            and self._should_handle_as_compare(message, active_instance)
+        )
+        turn_analysis: TurnAnalysisResult | None = None
+
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.INTENT_DETECTION)
-        intent = self.router.detect_intent(message, has_image=image_bytes is not None)
+        if compare_override:
+            intent = IntentType.TEXT_SEARCH
+        else:
+            turn_analysis = self.router.analyze_turn(
+                message,
+                has_image=image_bytes is not None,
+            )
+            self._store_preferences_from_analysis(user_id, session_id, turn_analysis)
+            intent = turn_analysis.intent
         self._log_stage("intent_detection", t0)
 
-        if intent == IntentType.GENERAL_TALK:
+        if compare_override:
+            async for event in self._workflow_compare(user_id, session_id, message):
+                yield event
+        elif intent == IntentType.GENERAL_TALK:
             async for event in self._workflow_general(user_id, session_id, message):
                 yield event
         elif intent in (IntentType.TEXT_SEARCH, IntentType.WEB_SEARCH):
             async for event in self._workflow_text_search(
-                user_id, session_id, message, include_web=web_search_enabled
+                user_id,
+                session_id,
+                message,
+                include_web=(web_search_enabled or intent == IntentType.WEB_SEARCH),
+                analyzed_query=(
+                    turn_analysis.to_decomposed_query(message, default_intent=IntentType.TEXT_SEARCH)
+                    if turn_analysis
+                    else None
+                ),
             ):
                 yield event
         elif intent == IntentType.IMAGE_SEARCH:
             async for event in self._workflow_image_search(
-                user_id, session_id, message, image_bytes, include_web=web_search_enabled
+                user_id,
+                session_id,
+                message,
+                image_bytes,
+                include_web=web_search_enabled,
+                analyzed_query=(
+                    turn_analysis.to_decomposed_query(message, default_intent=IntentType.IMAGE_SEARCH)
+                    if turn_analysis
+                    else None
+                ),
             ):
                 yield event
 
@@ -589,11 +821,98 @@ class MVPCommerceAgent:
             yield json.dumps({"type": "token", "content": token})
         self._log_stage("generation", t0)
 
+        self._record_assistant_message(session_id, full_response)
+
+    async def _workflow_compare(
+        self,
+        user_id: str,
+        session_id: str,
+        message: str,
+    ) -> AsyncIterator[str]:
+        t0 = time.time()
+        yield PipelineStage.to_sse(PipelineStage.PREPARING_COMPARE)
+        definition, worksheet_instance = self._prepare_compare_worksheet(session_id, message)
+        self._log_stage("prepare_compare", t0)
+        yield json.dumps(self.worksheet_engine.build_event_payload(definition, worksheet_instance))
+
+        comparison_products = list(worksheet_instance.result_refs.get("comparison_products", []))
+        if len(comparison_products) < 2:
+            clarification = self.worksheet_engine.build_compare_clarification_question(worksheet_instance)
+            t0 = time.time()
+            yield PipelineStage.to_sse(PipelineStage.GENERATING)
+            yield json.dumps({"type": "token", "content": clarification})
+            self._log_stage("generation", t0)
+            self._record_assistant_message(session_id, clarification)
+            return
+
+        memory_context = ""
+        chat_history = []
         if self.memory:
-            self.memory.on_assistant_message(
-                session_id,
-                ChatMessage(role="assistant", content=full_response, timestamp=time.time()),
+            yield PipelineStage.to_sse(PipelineStage.RECALLING_MEMORY)
+            query_emb = self.semantic_embedder.embed_query(message)
+            memory_context = self.memory.get_memory_context(user_id, query_emb.tolist())
+            chat_history = self.memory.get_chat_history(session_id)
+
+        frontend_items = [self._normalize_product(item) for item in comparison_products]
+        yield json.dumps(
+            {
+                "type": "products",
+                "items": frontend_items,
+                "tags": worksheet_instance.values.get("comparison_dimensions", []),
+                "mode": "compare",
+            }
+        )
+
+        t0 = time.time()
+        yield PipelineStage.to_sse(PipelineStage.GENERATING)
+        full_response = ""
+        if self._acts_enabled():
+            from src.agent_acts import ActBuilder
+
+            acts = (
+                ActBuilder()
+                .report(
+                    frontend_items,
+                    query=message,
+                    source=worksheet_instance.values.get("source_label", "recent results"),
+                )
+                .compare(
+                    indices=list(range(1, len(frontend_items) + 1)),
+                    dimensions=worksheet_instance.values.get("comparison_dimensions", []),
+                    query=message,
+                    pick_winner=True,
+                )
+                .style(
+                    tone="analytical but friendly",
+                    format_hint="Use a structured comparison, then give a clear verdict.",
+                    followup=True,
+                )
+                .build()
             )
+            async for token in self.master_brain.grounded_synthesize_stream(
+                message,
+                acts,
+                chat_history,
+                memory_context,
+            ):
+                full_response += token
+                yield json.dumps({"type": "token", "content": token})
+        else:
+            compare_prompt = self._build_compare_synthesis_prompt(
+                message,
+                worksheet_instance.values.get("comparison_dimensions", []),
+            )
+            async for token in self.master_brain.synthesize_stream(
+                compare_prompt,
+                frontend_items,
+                chat_history,
+                memory_context,
+            ):
+                full_response += token
+                yield json.dumps({"type": "token", "content": token})
+        self._log_stage("generation", t0)
+
+        self._record_assistant_message(session_id, full_response)
 
     async def _workflow_text_search(
         self,
@@ -601,12 +920,42 @@ class MVPCommerceAgent:
         session_id: str,
         message: str,
         include_web: bool = False,
+        analyzed_query: DecomposedQuery | None = None,
     ) -> AsyncIterator[str]:
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.DECOMPOSING_QUERY)
-        query = self.router.decompose_query(message)
-        query = self._sanitize_query(query)
-        self._log_stage("decomposition", t0)
+        definition = None
+        worksheet_instance = None
+        if self.ac.use_worksheets:
+            definition, worksheet_instance, _raw_query = self._prepare_product_search_worksheet(
+                session_id,
+                message,
+                include_web,
+                decomposed=analyzed_query,
+            )
+            query = self.worksheet_engine.build_query_from_instance(worksheet_instance, message)
+            query = self._sanitize_query(query)
+            self._log_stage("decomposition", t0)
+            yield json.dumps(self.worksheet_engine.build_event_payload(definition, worksheet_instance))
+
+            search_query_text = query.rewritten_query or message
+
+            if worksheet_instance.missing_required_fields:
+                clarification = self.worksheet_engine.build_clarification_question(
+                    definition,
+                    worksheet_instance,
+                )
+                t0 = time.time()
+                yield PipelineStage.to_sse(PipelineStage.GENERATING)
+                yield json.dumps({"type": "token", "content": clarification})
+                self._log_stage("generation", t0)
+                self._record_assistant_message(session_id, clarification)
+                return
+        else:
+            query = analyzed_query or self.router.decompose_query(message)
+            query = self._sanitize_query(query)
+            self._log_stage("decomposition", t0)
+            search_query_text = query.rewritten_query or message
 
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.SOURCING_LOCAL)
@@ -620,7 +969,7 @@ class MVPCommerceAgent:
             t0 = time.time()
             yield PipelineStage.to_sse(PipelineStage.SOURCING_WEB)
             web_result = self.web_pipeline.search(
-                query=query.rewritten_query or message,
+                query=search_query_text,
                 num_results=self.ac.web_num_results,
             )
             web_products = web_result["products"]
@@ -635,22 +984,41 @@ class MVPCommerceAgent:
             limit=max(self.ac.top_k_reranked, self.ac.top_k_final * 3),
         )
         fused_candidates = self._apply_keyword_type_boosts(
-            query.rewritten_query or message,
+            search_query_text,
             fused_candidates,
             limit=max(self.ac.top_k_reranked, self.ac.top_k_final * 3),
         )
-        reranked = self.router.rerank(message, fused_candidates, top_k=self.ac.top_k_final)
+        preference_context = self._get_preference_context(user_id, session_id)
+        reranked = self.router.rerank(
+            search_query_text,
+            fused_candidates,
+            top_k=self.ac.top_k_final,
+            preference_context=preference_context,
+        )
         self._log_stage("reranking", t0)
+
+        if self.ac.use_worksheets and definition and worksheet_instance:
+            worksheet_instance = self.worksheet_engine.update_result_refs(
+                worksheet_instance,
+                local_products=local_products,
+                web_products=web_products,
+                reranked_products=reranked,
+                query=query,
+                include_web=include_web,
+            )
+            self.worksheet_store.save(session_id, worksheet_instance)
 
         memory_context = ""
         chat_history = []
         if self.memory:
             yield PipelineStage.to_sse(PipelineStage.RECALLING_MEMORY)
-            query_emb = self.semantic_embedder.embed_query(message)
+            query_emb = self.semantic_embedder.embed_query(search_query_text)
             memory_context = self.memory.get_memory_context(user_id, query_emb.tolist())
             chat_history = self.memory.get_chat_history(session_id)
 
         frontend_items = [self._normalize_product(item) for item in reranked[: self.ac.top_k_final]]
+        if self.ac.use_worksheets and definition and worksheet_instance:
+            yield json.dumps(self.worksheet_engine.build_event_payload(definition, worksheet_instance))
         yield json.dumps({"type": "products", "items": frontend_items, "tags": query.tags, "filters": query.filters})
 
         t0 = time.time()
@@ -662,24 +1030,47 @@ class MVPCommerceAgent:
             )
             yield json.dumps({"type": "token", "content": no_results})
             self._log_stage("generation", t0)
-            if self.memory:
-                self.memory.on_assistant_message(
-                    session_id,
-                    ChatMessage(role="assistant", content=no_results, timestamp=time.time()),
-                )
+            self._record_assistant_message(session_id, no_results)
             return
 
         full_response = ""
-        async for token in self.master_brain.synthesize_stream(message, frontend_items, chat_history, memory_context):
-            full_response += token
-            yield json.dumps({"type": "token", "content": token})
+        if self._acts_enabled():
+            from src.agent_acts import select_acts
+
+            source = "catalog + web" if include_web else "local catalog"
+            acts = select_acts(
+                mode=self.ac.act_mode,
+                message=search_query_text,
+                products=frontend_items,
+                source=source,
+            )
+            if acts:
+                async for token in self.master_brain.grounded_synthesize_stream(
+                    search_query_text, acts, chat_history, memory_context
+                ):
+                    full_response += token
+                    yield json.dumps({"type": "token", "content": token})
+            else:
+                async for token in self.master_brain.synthesize_stream(
+                    search_query_text,
+                    frontend_items,
+                    chat_history,
+                    memory_context,
+                ):
+                    full_response += token
+                    yield json.dumps({"type": "token", "content": token})
+        else:
+            async for token in self.master_brain.synthesize_stream(
+                search_query_text,
+                frontend_items,
+                chat_history,
+                memory_context,
+            ):
+                full_response += token
+                yield json.dumps({"type": "token", "content": token})
         self._log_stage("generation", t0)
 
-        if self.memory:
-            self.memory.on_assistant_message(
-                session_id,
-                ChatMessage(role="assistant", content=full_response, timestamp=time.time()),
-            )
+        self._record_assistant_message(session_id, full_response)
 
     async def _workflow_image_search(
         self,
@@ -688,12 +1079,15 @@ class MVPCommerceAgent:
         message: str,
         image_bytes: Optional[bytes],
         include_web: bool = False,
+        analyzed_query: DecomposedQuery | None = None,
     ) -> AsyncIterator[str]:
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.ANALYZING_IMAGE)
 
         filters = {}
-        if message:
+        if analyzed_query is not None:
+            filters = dict(analyzed_query.filters or {})
+        elif message:
             filters = self.router.decompose_query(message).filters
 
         caption = ""
@@ -767,7 +1161,13 @@ class MVPCommerceAgent:
 
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.RERANKING)
-        reranked = self.router.rerank(caption or message, combined, top_k=self.ac.top_k_final)
+        preference_context = self._get_preference_context(user_id, session_id)
+        reranked = self.router.rerank(
+            caption or message,
+            combined,
+            top_k=self.ac.top_k_final,
+            preference_context=preference_context,
+        )
         self._log_stage("reranking", t0)
 
         memory_context = ""
@@ -788,18 +1188,59 @@ class MVPCommerceAgent:
             synth_query += f" They also said: {message}"
 
         full_response = ""
-        async for token in self.master_brain.synthesize_stream(
-            synth_query,
-            frontend_items,
-            chat_history,
-            memory_context,
-        ):
-            full_response += token
-            yield json.dumps({"type": "token", "content": token})
+        if self._acts_enabled():
+            from src.agent_acts import select_acts
+
+            source = "image search + web" if include_web else "image search"
+            acts = select_acts(
+                mode=self.ac.act_mode,
+                message=synth_query,
+                products=frontend_items,
+                source=source,
+                is_image_search=True,
+            )
+            if acts:
+                async for token in self.master_brain.grounded_synthesize_stream(
+                    synth_query, acts, chat_history, memory_context
+                ):
+                    full_response += token
+                    yield json.dumps({"type": "token", "content": token})
+            else:
+                async for token in self.master_brain.synthesize_stream(
+                    synth_query,
+                    frontend_items,
+                    chat_history,
+                    memory_context,
+                ):
+                    full_response += token
+                    yield json.dumps({"type": "token", "content": token})
+        else:
+            async for token in self.master_brain.synthesize_stream(
+                synth_query,
+                frontend_items,
+                chat_history,
+                memory_context,
+            ):
+                full_response += token
+                yield json.dumps({"type": "token", "content": token})
         self._log_stage("generation", t0)
 
-        if self.memory:
-            self.memory.on_assistant_message(
-                session_id,
-                ChatMessage(role="assistant", content=full_response, timestamp=time.time()),
-            )
+        self._record_assistant_message(session_id, full_response)
+
+    async def finalize_session(self, user_id: str, session_id: str) -> dict:
+        self._ensure_preference_services()
+
+        stored_profile = None
+        if self.preference_store:
+            stored_profile = self.preference_store.finalize_session(user_id, session_id)
+
+        if self.ac.use_worksheets:
+            self.worksheet_store.clear(session_id)
+
+        return {
+            "status": "finalized",
+            "user_id": user_id,
+            "session_id": session_id,
+            "preferences": stored_profile.preferences if stored_profile else {},
+            "updated_at": stored_profile.updated_at if stored_profile else None,
+        }

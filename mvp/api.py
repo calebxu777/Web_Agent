@@ -29,6 +29,22 @@ nickname_db = None
 ingest_db = None
 
 
+def resolve_env_flag(raw_value: str | None, default: bool = False) -> bool:
+    if raw_value is None or not raw_value.strip():
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def resolve_mvp_act_mode(raw_value: str | None, use_agent_acts: bool = False) -> str:
+    if not use_agent_acts:
+        return "off"
+
+    value = (raw_value or "").strip().lower()
+    if value in {"dynamic", "hardcoded"}:
+        return value
+    return "dynamic"
+
+
 def load_env_file(env_path: Path):
     if not env_path.exists():
         return
@@ -168,6 +184,16 @@ async def lifespan(app: FastAPI):
         "public_url_prefix",
         "https://storage.googleapis.com/web-agent-data-caleb-2026",
     )
+    use_worksheets = resolve_env_flag(os.environ.get("MVP_USE_WORKSHEETS"), default=False)
+    use_agent_acts = resolve_env_flag(os.environ.get("MVP_USE_AGENT_ACTS"), default=False)
+    use_preference_inference = resolve_env_flag(
+        os.environ.get("MVP_USE_PREFERENCE_INFERENCE"),
+        default=False,
+    )
+    use_preference_reranking = resolve_env_flag(
+        os.environ.get("MVP_USE_PREFERENCE_RERANKING"),
+        default=False,
+    )
 
     agent_config = MVPConfig(
         master_brain_model_name=os.environ.get("MVP_MASTER_BRAIN_MODEL", "gpt-4o-mini"),
@@ -192,6 +218,13 @@ async def lifespan(app: FastAPI):
         serpapi_mock_results_path=os.environ.get("SERPAPI_MOCK_RESULTS_PATH", ""),
         web_num_results=max(1, int(os.environ.get("MVP_WEB_NUM_RESULTS", "1"))),
         use_memory=os.environ.get("MVP_USE_MEMORY", "true").lower() not in {"0", "false", "no"},
+        use_preference_inference=use_preference_inference,
+        use_preference_reranking=use_preference_reranking,
+        preference_redis_ttl_seconds=int(os.environ.get("MVP_PREFERENCE_REDIS_TTL_SECONDS", "3600")),
+        user_preferences_db_path=os.environ.get(
+            "MVP_USER_PREFERENCES_DB_PATH",
+            "data/processed/user_preferences.db",
+        ),
         image_storage_provider="gcs",
         gcs_public_url=gcs_public_url,
         log_timing=True,
@@ -204,6 +237,12 @@ async def lifespan(app: FastAPI):
             f"{gcs_public_url.rstrip('/')}/data/processed/lancedb",
         ),
         lancedb_manifest_url=os.environ.get("MVP_GCS_LANCEDB_MANIFEST_URL", ""),
+        use_worksheets=use_worksheets,
+        use_agent_acts=use_agent_acts,
+        act_mode=resolve_mvp_act_mode(
+            os.environ.get("MVP_ACT_MODE"),
+            use_agent_acts=use_agent_acts,
+        ),
     )
 
     agent = MVPCommerceAgent(config=config, agent_config=agent_config)
@@ -241,6 +280,11 @@ class NicknameRequest(BaseModel):
 
 class IngestRequest(BaseModel):
     product_data: dict
+
+
+class SessionFinalizeRequest(BaseModel):
+    session_id: str
+    user_id: str = ""
 
 
 @app.get("/health")
@@ -297,6 +341,13 @@ async def cleanup_ingested():
 async def delete_ingested(product_id: str):
     deleted = ingest_db.delete(product_id)
     return JSONResponse({"status": "deleted" if deleted else "not_found", "product_id": product_id})
+
+
+@app.post("/api/session/finalize")
+async def finalize_session(req: SessionFinalizeRequest):
+    user_id = req.user_id.strip() if req.user_id else f"anon_{req.session_id}"
+    result = await agent.finalize_session(user_id=user_id, session_id=req.session_id)
+    return JSONResponse(result)
 
 
 @app.post("/api/chat")

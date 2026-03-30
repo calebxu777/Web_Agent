@@ -6,7 +6,11 @@ Live frontend: [web-agent-pi.vercel.app](https://web-agent-pi.vercel.app/)
 
 Frontend setup and deployment notes: [frontend/README.md](frontend/README.md)
 
-For the separate MVP backend path, refer to [mvp/README.md](mvp/README.md).
+## MVP Backend Status
+
+The production-ready backend path right now is the MVP implementation. For setup, environment variables, and deployment details, refer to [mvp/README.md](mvp/README.md).
+
+The main backend in `src/` is still in active testing and model-training/comparison work, so it should be treated as experimental for now.
 
 ## What It Offers
 
@@ -76,7 +80,10 @@ All routes
 - **Backend**: FastAPI orchestration layer for routing, retrieval, memory, and streaming
 - **Handyman Model**: small model for intent classification, query decomposition, and reranking
 - **Master Brain**: primary synthesis model for final responses and recommendation writing
-- **Local Retrieval**: SQLite for structured metadata filters plus LanceDB for vector search
+- **Worksheet Orchestration (MVP)**: session-scoped worksheet state for multi-turn product search, clarification, and compare flows
+- **Preference Memory (MVP)**: single-pass turn analysis that infers user preferences during routing, caches them per session, and reuses them during reranking and session finalization
+- **Grounded Agent Acts (Optional MVP)**: structured response acts for report, recommend, and compare generation, enabled through MVP env switches
+- **Catalog RAG Retrieval**: SQLite-backed metadata filtering plus LanceDB vector search over the product catalog
 - **Web Search**: SerpApi Google Shopping for structured external product results
 - **Memory Tiers**: Redis for short-term session memory and LanceDB for longer-term semantic/conversational memory
 
