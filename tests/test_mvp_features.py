@@ -158,6 +158,20 @@ class CapturingImageRouter(FakeRouter):
         return TurnAnalysisResult(intent=IntentType.IMAGE_SEARCH)
 
 
+class FakeImagePipeline:
+    def __init__(self, products=None, caption="blue jeans", tags=None):
+        self.products = list(products or [])
+        self.caption = caption
+        self.tags = list(tags or ["jeans"])
+
+    def search(self, image_source, user_text="", filters=None):
+        return {
+            "products": list(self.products),
+            "caption": self.caption,
+            "tags": list(self.tags),
+        }
+
+
 class MVPFeatureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -324,6 +338,33 @@ class MVPFeatureTests(unittest.TestCase):
             "recommend me hoodies",
             products,
             limit=2,
+        )
+
+        self.assertEqual(ranked[0]["product_id"], "2")
+
+    def test_keyword_boosts_penalize_gender_mismatch_from_preference_context(self):
+        products = [
+            {
+                "product_id": "1",
+                "title": "Women's Maternity Hoodie",
+                "subcategory": "Maternity Hoodies",
+                "category": "Clothing & Accessories",
+                "retrieval_score": 0.05,
+            },
+            {
+                "product_id": "2",
+                "title": "Men's Pullover Hoodie",
+                "subcategory": "Active Hoodies",
+                "category": "Clothing & Accessories",
+                "retrieval_score": 0.01,
+            },
+        ]
+
+        ranked = self.agent._apply_keyword_type_boosts(
+            "recommend me some hoodies",
+            products,
+            limit=2,
+            preference_context="User preference context:\n- gender: male",
         )
 
         self.assertEqual(ranked[0]["product_id"], "2")
@@ -548,6 +589,134 @@ class MVPFeatureTests(unittest.TestCase):
         self.assertTrue(agent.router.last_has_image)
         self.assertIsInstance(agent.router.last_recent_context, dict)
         self.assertNotIn("active_product_search", agent.router.last_recent_context)
+
+    def test_image_search_returns_no_match_fallback_when_no_products_found(self):
+        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_florence=True, use_memory=False))
+        agent.sqlite = FakeSQLite()
+        agent.image_pipeline = FakeImagePipeline(products=[], caption="blue jeans", tags=["jeans"])
+        agent.router = FakeRouter(
+            DecomposedQuery(
+                intent=IntentType.IMAGE_SEARCH,
+                original_query="recommend me some jeans like this",
+                rewritten_query="recommend me some jeans like this",
+            )
+        )
+
+        async def collect_events():
+            return [
+                json.loads(event)
+                async for event in agent._workflow_image_search(
+                    user_id="user-1",
+                    session_id="session-image-empty",
+                    message="recommend me some jeans like this",
+                    image_bytes=b"fake-image",
+                    include_web=False,
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        product_events = [event for event in events if event.get("type") == "products"]
+        token_events = [event for event in events if event.get("type") == "token"]
+
+        self.assertTrue(product_events)
+        self.assertEqual(product_events[-1]["items"], [])
+        text = "".join(event["content"] for event in token_events).lower()
+        self.assertIn("couldn't find a strong visual match", text)
+        self.assertIn("turning on web search", text)
+
+    def test_image_search_returns_final_apology_when_web_enabled_and_no_products_found(self):
+        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_florence=True, use_memory=False))
+        agent.sqlite = FakeSQLite()
+        agent.image_pipeline = FakeImagePipeline(products=[], caption="blue jeans", tags=["jeans"])
+        agent.router = FakeRouter(
+            DecomposedQuery(
+                intent=IntentType.IMAGE_SEARCH,
+                original_query="recommend me some jeans like this",
+                rewritten_query="recommend me some jeans like this",
+            )
+        )
+
+        async def collect_events():
+            return [
+                json.loads(event)
+                async for event in agent._workflow_image_search(
+                    user_id="user-1",
+                    session_id="session-image-empty-web",
+                    message="recommend me some jeans like this",
+                    image_bytes=b"fake-image",
+                    include_web=True,
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        token_events = [event for event in events if event.get("type") == "token"]
+
+        self.assertIn("sorry", "".join(event["content"] for event in token_events).lower())
+        self.assertIn("web search", "".join(event["content"] for event in token_events).lower())
+
+    def test_text_search_returns_web_search_suggestion_when_no_catalog_results(self):
+        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_worksheets=False, use_memory=False))
+        agent.sqlite = FakeSQLite()
+        agent.router = FakeRouter(
+            DecomposedQuery(
+                intent=IntentType.TEXT_SEARCH,
+                original_query="recommend some niche jackets",
+                tags=["jacket"],
+                filters={},
+                rewritten_query="niche jackets",
+            )
+        )
+        agent.retriever = ConfigurableRetriever([])
+        agent.master_brain = FakeMasterBrain()
+
+        async def collect_events():
+            return [
+                json.loads(event)
+                async for event in agent._workflow_text_search(
+                    user_id="user-1",
+                    session_id="session-text-empty",
+                    message="recommend some niche jackets",
+                    include_web=False,
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        token_events = [event for event in events if event.get("type") == "token"]
+
+        self.assertIn("turning on web search", "".join(event["content"] for event in token_events).lower())
+
+    def test_text_search_returns_final_apology_when_web_enabled_and_no_results_found(self):
+        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_worksheets=False, use_memory=False))
+        agent.sqlite = FakeSQLite()
+        agent.router = FakeRouter(
+            DecomposedQuery(
+                intent=IntentType.TEXT_SEARCH,
+                original_query="recommend some niche jackets",
+                tags=["jacket"],
+                filters={},
+                rewritten_query="niche jackets",
+            )
+        )
+        agent.retriever = ConfigurableRetriever([])
+        agent.master_brain = FakeMasterBrain()
+
+        async def collect_events():
+            return [
+                json.loads(event)
+                async for event in agent._workflow_text_search(
+                    user_id="user-1",
+                    session_id="session-text-empty-web",
+                    message="recommend some niche jackets",
+                    include_web=True,
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        token_events = [event for event in events if event.get("type") == "token"]
+        text = "".join(event["content"] for event in token_events).lower()
+
+        self.assertIn("sorry", text)
+        self.assertIn("web search", text)
 
     def test_compare_workflow_uses_last_search_results(self):
         agent = MVPCommerceAgent(

@@ -161,6 +161,13 @@ class MVPPreferenceTests(unittest.TestCase):
                         "confidence": 0.84,
                         "source_text": "Keep it under $120",
                     },
+                    {
+                        "kind": "gender",
+                        "value": " Male ",
+                        "polarity": "positive",
+                        "confidence": 0.88,
+                        "source_text": "I am male",
+                    },
                 ],
             }
         )
@@ -172,6 +179,7 @@ class MVPPreferenceTests(unittest.TestCase):
         self.assertEqual(result.filters["price_max"], 120)
         self.assertIn(("color", "red"), extracted)
         self.assertIn(("budget_max", "120"), extracted)
+        self.assertIn(("gender", "male"), extracted)
 
     def test_session_preference_merge_is_deterministic(self):
         store = self.build_store()

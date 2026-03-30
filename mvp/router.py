@@ -56,6 +56,7 @@ Supported preference kinds:
 - color
 - brand
 - size
+- gender
 - fit
 - style
 - material

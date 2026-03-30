@@ -223,6 +223,91 @@ class MVPCommerceAgent:
     def _rerank_window_size(self) -> int:
         return max(self.ac.top_k_reranked, self.ac.top_k_final * 3)
 
+    @staticmethod
+    def _no_results_message(include_web: bool, *, visual: bool = False) -> str:
+        if visual:
+            if include_web:
+                return (
+                    "Sorry, I couldn't find a similar item from either the current catalog or web search. "
+                    "I don't have a strong similar match for that image right now."
+                )
+            return (
+                "I couldn't find a strong visual match for that image in the current catalog. "
+                "Try turning on web search, or upload a clearer photo and add a short detail like color, fit, or product type."
+            )
+
+        if include_web:
+            return (
+                "Sorry, I couldn't find strong matches for that request from either the current catalog or web search. "
+                "I don't have a good similar result right now."
+            )
+        return (
+            "I couldn't find strong matches in the current catalog for that request. "
+            "Try turning on web search, or broaden the request by removing one constraint like budget or product type."
+        )
+
+    @staticmethod
+    def _gender_target(query_text: str, preference_context: str = "") -> str:
+        combined = " ".join(part for part in [query_text or "", preference_context or ""] if part).lower()
+        if not combined:
+            return ""
+
+        male_markers = [
+            "gender: male",
+            "gender\": \"male",
+            " men ",
+            " men's",
+            " mens",
+            " male",
+            " guy",
+            " guys",
+            " for him",
+            " man ",
+        ]
+        female_markers = [
+            "gender: female",
+            "gender\": \"female",
+            " women ",
+            " women's",
+            " womens",
+            " female",
+            " lady",
+            " ladies",
+            " for her",
+            " maternity",
+        ]
+
+        if any(marker in f" {combined} " for marker in male_markers):
+            return "male"
+        if any(marker in f" {combined} " for marker in female_markers):
+            return "female"
+        return ""
+
+    @classmethod
+    def _gender_penalty(cls, query_text: str, product: dict, preference_context: str = "") -> float:
+        target = cls._gender_target(query_text, preference_context)
+        if not target:
+            return 0.0
+
+        title = str(product.get("title") or "").lower()
+        subcategory = str(product.get("subcategory") or "").lower()
+        category = str(product.get("category") or "").lower()
+        description = str(product.get("description") or "").lower()
+        brand = str(product.get("brand") or "").lower()
+        attributes = str(product.get("attributes") or "").lower()
+        combined = " ".join([title, subcategory, category, description, brand, attributes])
+
+        male_markers = {" men ", " men's", " mens", " male", " boys", " boy ", " unisex"}
+        female_markers = {" women ", " women's", " womens", " female", " girls", " girl ", " maternity", " ladies"}
+
+        mismatched = False
+        if target == "male":
+            mismatched = any(marker in f" {combined} " for marker in female_markers)
+        elif target == "female":
+            mismatched = any(marker in f" {combined} " for marker in male_markers)
+
+        return -4.0 if mismatched else 0.0
+
     def _ensure_preference_services(self) -> None:
         if not self._preferences_enabled():
             return
@@ -835,7 +920,13 @@ class MVPCommerceAgent:
     def _tokenize_keywords(text: str) -> list[str]:
         return [token for token in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(token) > 2]
 
-    def _apply_keyword_type_boosts(self, query_text: str, products: list[dict], limit: int) -> list[dict]:
+    def _apply_keyword_type_boosts(
+        self,
+        query_text: str,
+        products: list[dict],
+        limit: int,
+        preference_context: str = "",
+    ) -> list[dict]:
         if not products:
             return products
 
@@ -912,6 +1003,8 @@ class MVPCommerceAgent:
                     for marker in ["cap", "hat", "skirt", "dress", "sandal", "bag", "shirt"]
                 ):
                     boost -= 1.0
+
+            boost += self._gender_penalty(query_text, product, preference_context)
 
             updated = dict(product)
             updated["keyword_boost"] = boost
@@ -1318,6 +1411,7 @@ class MVPCommerceAgent:
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.RERANKING)
         rerank_window = self._rerank_window_size()
+        preference_context = self._get_preference_context(user_id, session_id)
         fused_candidates = self._fuse_ranked_product_lists(
             [("local", local_products), ("web", web_products)],
             limit=rerank_window,
@@ -1326,8 +1420,8 @@ class MVPCommerceAgent:
             search_query_text,
             fused_candidates,
             limit=rerank_window,
+            preference_context=preference_context,
         )
-        preference_context = self._get_preference_context(user_id, session_id)
         reranked = self.router.rerank(
             search_query_text,
             fused_candidates,
@@ -1366,10 +1460,7 @@ class MVPCommerceAgent:
         t0 = time.time()
         yield PipelineStage.to_sse(self._generation_stage(user_id, mode="recommendations"))
         if not frontend_items:
-            no_results = (
-                "I couldn't find strong matches in the current catalog for that request. "
-                "Try broadening the category or removing one constraint like budget or product type."
-            )
+            no_results = self._no_results_message(include_web, visual=False)
             yield json.dumps({"type": "token", "content": no_results})
             self._log_stage("generation", t0)
             self._record_assistant_message(session_id, no_results)
@@ -1495,16 +1586,17 @@ class MVPCommerceAgent:
             [("local", products), ("web", web_products)],
             limit=self._rerank_window_size(),
         )
+        preference_context = self._get_preference_context(user_id, session_id)
         combined = self._apply_keyword_type_boosts(
             caption or message,
             combined,
             limit=self._rerank_window_size(),
+            preference_context=preference_context,
         )
 
         t0 = time.time()
         yield PipelineStage.to_sse(PipelineStage.RERANKING)
         rerank_window = self._rerank_window_size()
-        preference_context = self._get_preference_context(user_id, session_id)
         reranked = self.router.rerank(
             caption or message,
             combined,
@@ -1527,6 +1619,12 @@ class MVPCommerceAgent:
 
         t0 = time.time()
         yield PipelineStage.to_sse(self._generation_stage(user_id, mode="recommendations"))
+        if not frontend_items:
+            no_results = self._no_results_message(include_web, visual=True)
+            yield json.dumps({"type": "token", "content": no_results})
+            self._log_stage("generation", t0)
+            self._record_assistant_message(session_id, no_results)
+            return
         synth_query = f"The user uploaded an image that shows: {caption}."
         if message:
             synth_query += f" They also said: {message}"

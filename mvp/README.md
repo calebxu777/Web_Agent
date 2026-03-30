@@ -36,6 +36,23 @@ When agent acts are enabled, the final response can be generated through structu
 
 Preference memory is intentionally lightweight. Turn-level preferences inferred during routing are merged into a session profile in Redis, and `POST /api/session/finalize` can persist the merged profile into SQLite for longer-term reuse by nickname or user identity. The preference layer is designed to influence reranking and continuity, not to replace explicit query constraints from the current turn.
 
+## MVP Limitations
+
+- **Limited context awareness**: the current MVP is still weak at conversational carryover when the next turn depends on implied references instead of explicit restatement. For example, if the user first says `recommend me some jeans` and then follows with `recommend me some blue ones`, the system may not reliably resolve what `ones` refers to.
+- **Worksheet structure is for the backend, not the user**: the worksheet is meant to help the router, retrieval stack, and response generation stay structured around catalog-supported fields, but user turns should still remain permissive, especially when web search may surface products with looser or different schemas.
+- **Small local catalog**: the local product database is still relatively small, so retrieval quality and variety are constrained by coverage, not just model quality. some data does not have image to it.
+- **Background-sensitive image search**: many catalog images are clean product shots on white or neutral backgrounds, so uploaded images with very different background colors or scenes can degrade visual matching. In practice this means an otherwise relevant image can fail local image retrieval, and web search may also miss because the visual cue distribution differs from the catalog.
+- **Latency is still heavier than the long-term target**: right now the MVP can spend expensive model time on routing, reranking, and other small subtasks that do not necessarily need a larger API model.
+
+## Planned Improvements
+
+- **Recent-turn caching in Redis**: cache roughly the most recent 10 rounds so the system can better resolve short-horizon follow-ups and references before falling back to longer-term memory.
+- **Periodic conversation summaries into LanceDB**: after each 10-round block, write a summary of the current conversation state into LanceDB so the agent can recover shopping context and preferences beyond the immediate Redis window.
+- **Tokenizer-aware memory compression**: use tokenizer-bounded summarization so these longer-term memory writes stay compact, retrieval-friendly, and cheap enough to maintain over time.
+- **Broader catalog coverage**: expand the local database so local retrieval has better recall before leaning on web search.
+- **Background-robust image retrieval**: add a small segmentation or foreground-extraction model before DINOv2 embedding so retrieval focuses more on the product silhouette and texture, and less on background color differences between uploaded photos and catalog images.
+- **Smaller specialized models through SGLang**: allocate cheaper tasks such as routing, query decomposition, reranking, and similar helper work to tiny open-source models served through SGLang, while reserving the larger model budget for synthesis-heavy turns.
+
 ## How To Use
 
 This is the current repo-level path for running and testing the MVP backend.
@@ -135,22 +152,6 @@ After conversations have been recorded, you can evaluate them locally or from GC
 ```
 
 Use `--mode python` for deterministic rubric scoring, `--mode llm` for API-based critic scoring, or `--mode both` to generate both views in the same report.
-
-## MVP Limitations
-
-- **Limited context awareness**: the current MVP is still weak at conversational carryover when the next turn depends on implied references instead of explicit restatement. For example, if the user first says `recommend me some jeans` and then follows with `recommend me some blue ones`, the system may not reliably resolve what `ones` refers to.
-- **Worksheet structure is for the backend, not the user**: the worksheet is meant to help the router, retrieval stack, and response generation stay structured around catalog-supported fields, but user turns should still remain permissive, especially when web search may surface products with looser or different schemas.
-- **Small local catalog**: the local product database is still relatively small, so retrieval quality and variety are constrained by coverage, not just model quality. some data does not have image to it.
-- **Latency is still heavier than the long-term target**: right now the MVP can spend expensive model time on routing, reranking, and other small subtasks that do not necessarily need a larger API model.
-  
-
-## Planned Improvements
-
-- **Recent-turn caching in Redis**: cache roughly the most recent 10 rounds so the system can better resolve short-horizon follow-ups and references before falling back to longer-term memory.
-- **Periodic conversation summaries into LanceDB**: after each 10-round block, write a summary of the current conversation state into LanceDB so the agent can recover shopping context and preferences beyond the immediate Redis window.
-- **Tokenizer-aware memory compression**: use tokenizer-bounded summarization so these longer-term memory writes stay compact, retrieval-friendly, and cheap enough to maintain over time.
-- **Broader catalog coverage**: expand the local database so local retrieval has better recall before leaning on web search.
-- **Smaller specialized models through SGLang**: allocate cheaper tasks such as routing, query decomposition, reranking, and similar helper work to tiny open-source models served through SGLang, while reserving the larger model budget for synthesis-heavy turns.
 
 ## Key Files
 
