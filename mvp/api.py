@@ -232,7 +232,7 @@ async def lifespan(app: FastAPI):
         ),
         local_evaluation_recordings_path=os.environ.get(
             "MVP_LOCAL_EVALUATION_RECORDINGS_PATH",
-            "mvp/evaluation/conversation_recordings.jsonl",
+            "data/evaluation/conversation_recordings.jsonl",
         ),
         image_storage_provider="gcs",
         gcs_public_url=gcs_public_url,

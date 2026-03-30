@@ -404,7 +404,9 @@ class MVPPreferenceTests(unittest.TestCase):
         self.assertEqual(result["preferences"], {"style": ["minimalist"]})
         self.assertIsNone(agent.preference_store.get_session_profile("session-42"))
         self.assertEqual(result["evaluation_gcs_uri"], "gs://test-bucket/evaluations/recording.jsonl")
+        self.assertIsNone(result["evaluation_gcs_error"])
         self.assertEqual(result["preference_db_gcs_uri"], "gs://test-bucket/preference/user_preferences.db")
+        self.assertIsNone(result["preference_db_gcs_error"])
 
         local_recording = Path(self.evaluation_path).read_text(encoding="utf-8").strip().splitlines()
         self.assertEqual(len(local_recording), 1)

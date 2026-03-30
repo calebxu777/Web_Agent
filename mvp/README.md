@@ -117,7 +117,7 @@ curl -X POST http://127.0.0.1:8011/api/session/finalize `
 That finalize step is where the MVP currently:
 
 - merges session preferences into the durable SQLite preference DB
-- appends a local conversation record to `mvp/evaluation/conversation_recordings.jsonl`
+- appends a local conversation record to `data/evaluation/conversation_recordings.jsonl`
 - uploads the preference DB to GCS under `preference/`
 - appends the finalized conversation record to GCS under `evaluations/recording.jsonl`
 

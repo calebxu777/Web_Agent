@@ -76,7 +76,7 @@ class MVPConfig:
     use_preference_reranking: bool = False
     preference_redis_ttl_seconds: int = 3600
     user_preferences_db_path: str = "data/processed/user_preferences.db"
-    local_evaluation_recordings_path: str = "mvp/evaluation/conversation_recordings.jsonl"
+    local_evaluation_recordings_path: str = "data/evaluation/conversation_recordings.jsonl"
     image_storage_provider: str = "gcs"
     gcs_public_url: str = "https://storage.googleapis.com/web-agent-data-caleb-2026"
     gcs_bucket_name: str = "web-agent-data-caleb-2026"
@@ -288,10 +288,10 @@ class MVPCommerceAgent:
         user_id: str,
         session_id: str,
         preferences: dict[str, object],
-    ) -> tuple[str | None, str | None]:
+    ) -> tuple[str | None, str | None, str | None]:
         messages = self._get_full_conversation_messages(session_id)
         if not messages:
-            return None, None
+            return None, None, None
 
         record = build_conversation_record(
             user_id=user_id,
@@ -303,6 +303,7 @@ class MVPCommerceAgent:
         local_path = append_record_to_jsonl(self.ac.local_evaluation_recordings_path, record)
 
         gcs_uri = None
+        gcs_error = None
         if self.ac.sync_evaluations_to_gcs and self.gcs_sync:
             try:
                 gcs_uri = self.gcs_sync.append_jsonl_record(
@@ -310,29 +311,30 @@ class MVPCommerceAgent:
                     record,
                 )
             except Exception as exc:
+                gcs_error = str(exc)
                 if self.ac.log_timing:
                     print(f"  [evaluation] gcs sync skipped: {exc}")
 
-        return str(local_path), gcs_uri
+        return str(local_path), gcs_uri, gcs_error
 
-    def _sync_preferences_db_to_gcs(self) -> str | None:
+    def _sync_preferences_db_to_gcs(self) -> tuple[str | None, str | None]:
         if not self.ac.sync_preferences_to_gcs or not self.gcs_sync:
-            return None
+            return None, None
 
         db_path = Path(self.ac.user_preferences_db_path)
         if not db_path.exists():
-            return None
+            return None, None
 
         try:
             return self.gcs_sync.upload_file(
                 db_path,
                 self.ac.gcs_preferences_blob_path,
                 content_type="application/x-sqlite3",
-            )
+            ), None
         except Exception as exc:
             if self.ac.log_timing:
                 print(f"  [preferences] gcs db sync skipped: {exc}")
-            return None
+            return None, str(exc)
 
     def _clear_session_artifacts(self, session_id: str) -> None:
         self.conversation_recording_store.clear_session(session_id)
@@ -1380,12 +1382,12 @@ class MVPCommerceAgent:
             stored_profile = self.preference_store.finalize_session(user_id, session_id)
 
         preferences = stored_profile.preferences if stored_profile else {}
-        evaluation_record_path, evaluation_gcs_uri = self._append_evaluation_record(
+        evaluation_record_path, evaluation_gcs_uri, evaluation_gcs_error = self._append_evaluation_record(
             user_id=user_id,
             session_id=session_id,
             preferences=preferences,
         )
-        preference_db_gcs_uri = self._sync_preferences_db_to_gcs()
+        preference_db_gcs_uri, preference_db_gcs_error = self._sync_preferences_db_to_gcs()
 
         if self.ac.use_worksheets:
             self.worksheet_store.clear(session_id)
@@ -1399,5 +1401,7 @@ class MVPCommerceAgent:
             "updated_at": stored_profile.updated_at if stored_profile else None,
             "evaluation_record_path": evaluation_record_path,
             "evaluation_gcs_uri": evaluation_gcs_uri,
+            "evaluation_gcs_error": evaluation_gcs_error,
             "preference_db_gcs_uri": preference_db_gcs_uri,
+            "preference_db_gcs_error": preference_db_gcs_error,
         }
