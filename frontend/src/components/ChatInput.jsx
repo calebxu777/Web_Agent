@@ -13,6 +13,9 @@ export default function ChatInput({ onSend, disabled }) {
     onSend(text, image);
     setText("");
     setImage(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
 
   const handleKeyDown = (e) => {
@@ -25,6 +28,7 @@ export default function ChatInput({ onSend, disabled }) {
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files[0]) {
       setImage(e.target.files[0]);
+      e.target.value = "";
     }
   };
 
@@ -46,7 +50,12 @@ export default function ChatInput({ onSend, disabled }) {
           }}
         >
           <span
-            onClick={() => setImage(null)}
+            onClick={() => {
+              setImage(null);
+              if (fileInputRef.current) {
+                fileInputRef.current.value = "";
+              }
+            }}
             style={{
               position: "absolute",
               top: "-6px",

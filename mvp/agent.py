@@ -282,13 +282,15 @@ class MVPCommerceAgent:
         session_id: str,
         current_message: str,
         active_instance: WorksheetInstance | None,
+        *,
+        include_active_search: bool = True,
     ) -> dict[str, object]:
         context: dict[str, object] = {}
         recent_messages = self._recent_messages_for_analysis(session_id, current_message)
         if recent_messages:
             context["recent_messages"] = recent_messages
 
-        if active_instance and active_instance.worksheet_name == "product_search":
+        if include_active_search and active_instance and active_instance.worksheet_name == "product_search":
             values = {
                 key: value
                 for key, value in active_instance.values.items()
@@ -1078,7 +1080,12 @@ class MVPCommerceAgent:
         if compare_override:
             intent = IntentType.TEXT_SEARCH
         else:
-            recent_context = self._build_turn_analysis_context(session_id, message, active_instance)
+            recent_context = self._build_turn_analysis_context(
+                session_id,
+                message,
+                active_instance,
+                include_active_search=(image_bytes is None),
+            )
             turn_analysis = self.router.analyze_turn(
                 message,
                 has_image=image_bytes is not None,

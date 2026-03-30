@@ -1,6 +1,7 @@
 import json
 import unittest
 import asyncio
+import types
 from unittest.mock import patch
 
 from mvp.agent import MVPCommerceAgent, MVPConfig, PipelineStage
@@ -137,6 +138,24 @@ class FollowupRouter(FakeRouter):
             original_query=_message,
             rewritten_query=_message,
         )
+
+
+class CapturingImageRouter(FakeRouter):
+    def __init__(self):
+        super().__init__(
+            DecomposedQuery(
+                intent=IntentType.IMAGE_SEARCH,
+                original_query="find something similar to this",
+                rewritten_query="",
+            )
+        )
+        self.last_recent_context = None
+        self.last_has_image = None
+
+    def analyze_turn(self, _message: str, has_image: bool = False, recent_context: dict | None = None) -> TurnAnalysisResult:
+        self.last_recent_context = recent_context
+        self.last_has_image = has_image
+        return TurnAnalysisResult(intent=IntentType.IMAGE_SEARCH)
 
 
 class MVPFeatureTests(unittest.TestCase):
@@ -489,6 +508,46 @@ class MVPFeatureTests(unittest.TestCase):
         self.assertEqual(compare_definition.name, "compare_products")
         self.assertEqual(len(compare_instance.result_refs["comparison_products"]), 3)
         self.assertIn("reviews", compare_instance.values["comparison_dimensions"])
+
+    def test_image_turn_does_not_inherit_active_search_filters(self):
+        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_worksheets=True))
+        search_definition = agent.worksheet_registry.get("product_search")
+        search_instance = agent.worksheet_engine.create_instance(search_definition)
+        search_instance.values.update(
+            {
+                "product_type": "shirt",
+                "color": "blue",
+                "rewritten_query": "blue shirts",
+            }
+        )
+        agent.worksheet_store.save("session-image-isolation", search_instance)
+
+        agent.router = CapturingImageRouter()
+        agent._initialized = True
+
+        async def fake_image_workflow(self, user_id, session_id, message, image_bytes, include_web=False, analyzed_query=None):
+            yield json.dumps({"type": "products", "items": [], "tags": [], "caption": ""})
+
+        agent._workflow_image_search = types.MethodType(fake_image_workflow, agent)
+
+        async def collect_events():
+            return [
+                json.loads(event)
+                async for event in agent.handle_message(
+                    user_id="user-1",
+                    session_id="session-image-isolation",
+                    message="find something similar to this",
+                    image_bytes=b"fake-image",
+                    web_search_enabled=False,
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+
+        self.assertTrue(events)
+        self.assertTrue(agent.router.last_has_image)
+        self.assertIsInstance(agent.router.last_recent_context, dict)
+        self.assertNotIn("active_product_search", agent.router.last_recent_context)
 
     def test_compare_workflow_uses_last_search_results(self):
         agent = MVPCommerceAgent(

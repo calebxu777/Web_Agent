@@ -40,6 +40,18 @@ export default function Home() {
     }
   };
 
+  const fileToDataUrl = (file) =>
+    new Promise((resolve, reject) => {
+      if (!file) {
+        resolve(null);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+      reader.onerror = () => reject(reader.error || new Error("Failed to read image file."));
+      reader.readAsDataURL(file);
+    });
+
   const sendMessage = async (text, image) => {
     const newMessage = { id: Date.now(), role: "user", content: text };
     if (image) {
@@ -53,12 +65,14 @@ export default function Home() {
     setWorksheetState(null);
 
     try {
+      const imageBase64 = image ? await fileToDataUrl(image) : null;
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: text,
           hasImage: !!image,
+          imageBase64,
           webSearch: webSearchEnabled,
           user_id: nickname || "",  // Send nickname as user_id
         }),

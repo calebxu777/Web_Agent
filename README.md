@@ -82,6 +82,7 @@ All routes
 - **Master Brain**: primary synthesis model for final responses and recommendation writing
 - **Worksheet Orchestration (MVP)**: session-scoped worksheet state for multi-turn product search, clarification, and compare flows
 - **Preference Memory (MVP)**: single-pass turn analysis that infers user preferences during routing, caches them per session, and reuses them during reranking and session finalization
+- **Evaluation Pipeline (MVP)**: conversation recordings, inferred preferences, and finalized preference snapshots can be stored locally and synced to GCS, supporting offline quality review now and future DPO-style data creation for testing open-source replacements for the hosted LLM path
 - **Grounded Agent Acts (Optional MVP)**: structured response acts for report, recommend, and compare generation, enabled through MVP env switches
 - **Catalog RAG Retrieval**: SQLite-backed metadata filtering plus LanceDB vector search over the product catalog
 - **Web Search**: SerpApi Google Shopping for structured external product results
@@ -91,6 +92,7 @@ All routes
 
 - **Master Brain for MVP**: use an API LLM backend first for faster iteration and demos
 - **Open-source comparison path**: serve an open-source LLM through SGLang on a cluster and compare quality/latency against the API LLM path
+- **Evaluation-to-training loop**: use the MVP evaluation pipeline to collect conversation traces, preferences, and critique signals that can later be curated into DPO-style training data for open-source Master Brain experiments
 - **Handyman role**: use the Handyman model not only for routing and query decomposition, but also as the reranker over local and web candidate products
 - **Web search path**: use SerpApi Google Shopping instead of generic page scraping so web results arrive in a more structured product format
 
