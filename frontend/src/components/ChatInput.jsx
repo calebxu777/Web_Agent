@@ -2,10 +2,10 @@
 
 import { useState, useRef } from "react";
 
-const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg"]);
-const SUPPORTED_EXTENSIONS = [".png", ".jpg", ".jpeg"];
+const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const SUPPORTED_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"];
 const UNSUPPORTED_IMAGE_MESSAGE =
-  "That image format isn't supported yet. Please upload PNG, JPG, or JPEG.";
+  "That image format isn't supported yet. Please upload PNG, JPG, JPEG, or WebP.";
 
 function isSupportedImageFile(file) {
   if (!file) return false;
@@ -143,7 +143,7 @@ export default function ChatInput({ onSend, onUnsupportedImage, disabled }) {
           type="file"
           ref={fileInputRef}
           onChange={handleFileChange}
-          accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+          accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
           style={{ display: "none" }}
         />
 
