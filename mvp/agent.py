@@ -44,6 +44,11 @@ from mvp.worksheet_store import InMemoryWorksheetStore, build_worksheet_store
 from src.master_brain import MasterBrain
 from src.schema import ChatMessage, DecomposedQuery, IntentType
 
+_NON_SEARCH_FOLLOWUP_PATTERNS = re.compile(
+    r"\b(thanks|thank you|hello|hi|hey|who are you|what can you do|help|cool|awesome|nice|ok|okay)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class MVPConfig:
@@ -218,6 +223,125 @@ class MVPCommerceAgent:
 
     def _record_conversation_message(self, session_id: str, message: ChatMessage) -> None:
         self.conversation_recording_store.add_message(session_id, message)
+
+    def _recent_messages_for_analysis(
+        self,
+        session_id: str,
+        current_message: str,
+        limit: int = 4,
+    ) -> list[dict[str, str]]:
+        messages: list[ChatMessage] = []
+        if self.memory:
+            try:
+                messages = self.memory.get_chat_history(session_id)
+            except Exception as exc:
+                if self.ac.log_timing:
+                    print(f"  [memory] analysis history skipped: {exc}")
+
+        if not messages:
+            messages = self.conversation_recording_store.get_messages(session_id)
+
+        if messages and messages[-1].role == "user" and messages[-1].content == current_message:
+            messages = messages[:-1]
+
+        return [
+            {"role": str(message.role or "user"), "content": str(message.content or "")}
+            for message in messages[-limit:]
+            if str(message.content or "").strip()
+        ]
+
+    def _build_turn_analysis_context(
+        self,
+        session_id: str,
+        current_message: str,
+        active_instance: WorksheetInstance | None,
+    ) -> dict[str, object]:
+        context: dict[str, object] = {}
+        recent_messages = self._recent_messages_for_analysis(session_id, current_message)
+        if recent_messages:
+            context["recent_messages"] = recent_messages
+
+        if active_instance and active_instance.worksheet_name == "product_search":
+            values = {
+                key: value
+                for key, value in active_instance.values.items()
+                if key in {
+                    "product_type",
+                    "color",
+                    "size",
+                    "brand",
+                    "price_min",
+                    "price_max",
+                    "style_tags",
+                    "rewritten_query",
+                }
+                and value not in (None, "", [], {})
+            }
+            result_titles = [
+                str(item.get("title", "")).strip()
+                for item in list(active_instance.result_refs.get("last_products", []))[:3]
+                if str(item.get("title", "")).strip()
+            ]
+            search_context = {
+                "status": active_instance.status,
+                "values": values,
+                "last_query": (
+                    active_instance.last_query_record.model_dump()
+                    if active_instance.last_query_record
+                    else {}
+                ),
+                "recent_result_titles": result_titles,
+            }
+            context["active_product_search"] = search_context
+
+        return context
+
+    def _should_continue_active_search(
+        self,
+        message: str,
+        active_instance: WorksheetInstance | None,
+        turn_analysis: TurnAnalysisResult | None,
+    ) -> bool:
+        if not active_instance or active_instance.worksheet_name != "product_search":
+            return False
+        if not message or not message.strip():
+            return False
+        if self.worksheet_engine.is_compare_message(message):
+            return False
+        if turn_analysis and turn_analysis.intent in {IntentType.TEXT_SEARCH, IntentType.WEB_SEARCH, IntentType.IMAGE_SEARCH}:
+            return False
+
+        lowered = message.strip().lower()
+        if _NON_SEARCH_FOLLOWUP_PATTERNS.search(lowered):
+            return False
+
+        tokens = re.findall(r"[a-z0-9$]+", lowered)
+        if any(
+            signal in lowered
+            for signal in [
+                "under ",
+                "over ",
+                "less than",
+                "more than",
+                "cheaper",
+                "budget",
+                "reviews",
+                "rating",
+                "color",
+                "size",
+            ]
+        ):
+            return True
+
+        if turn_analysis and (turn_analysis.filters or turn_analysis.tags):
+            return True
+
+        has_active_search_state = bool(
+            active_instance.values.get("product_type")
+            or active_instance.values.get("rewritten_query")
+            or active_instance.result_refs.get("last_products")
+        )
+        return has_active_search_state and 0 < len(tokens) <= 5
 
     def _store_captured_preferences(
         self,
@@ -568,34 +692,63 @@ class MVPCommerceAgent:
 
         print(f"  Downloaded {downloaded} LanceDB files from {source}")
 
-    def _normalize_product(self, product: dict) -> dict:
-        item = dict(product)
-        explicit_image = str(item.get("image", "") or item.get("image_url", "") or "").strip()
-        raw_images = item.get("image_urls", "")
-        first_image = ""
-
-        if explicit_image:
-            first_image = explicit_image
-        elif isinstance(raw_images, list):
-            first_image = raw_images[0] if raw_images else ""
-        elif isinstance(raw_images, str):
-            cleaned = raw_images.strip()
+    @staticmethod
+    def _coerce_image_candidates(raw_value) -> list[str]:
+        if not raw_value:
+            return []
+        if isinstance(raw_value, list):
+            return [str(item).strip() for item in raw_value if str(item).strip()]
+        if isinstance(raw_value, str):
+            cleaned = raw_value.strip()
+            if not cleaned:
+                return []
             if cleaned.startswith("[") and cleaned.endswith("]"):
                 try:
                     parsed = json.loads(cleaned)
-                    if isinstance(parsed, list) and parsed:
-                        first_image = str(parsed[0]).strip()
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
                 except Exception:
-                    first_image = cleaned.split(",")[0].strip() if cleaned else ""
-            else:
-                first_image = cleaned.split(",")[0].strip() if cleaned else ""
+                    pass
+            return [part.strip() for part in cleaned.split(",") if part.strip()]
+        return [str(raw_value).strip()]
 
-        item["image"] = self.ac.resolve_image_url(first_image)
-        item["image_urls"] = (
-            item["image"]
-            or self.ac.resolve_image_url(str(item.get("image_url", "") or "").strip())
-            or raw_images
+    def _extract_resolved_image_urls(self, product: dict) -> list[str]:
+        item = dict(product or {})
+        raw_candidates = []
+        for key in ["image", "image_url", "imageUrl", "thumbnail", "thumbnail_url", "thumbnailUrl"]:
+            raw_candidates.extend(self._coerce_image_candidates(item.get(key)))
+        raw_candidates.extend(
+            self._coerce_image_candidates(
+                item.get("image_urls", item.get("imageUrls", item.get("images", "")))
+            )
         )
+
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for candidate in raw_candidates:
+            normalized = self.ac.resolve_image_url(candidate)
+            key = normalized.strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            resolved.append(normalized)
+        return resolved
+
+    def _product_has_image(self, product: dict) -> bool:
+        return bool(self._extract_resolved_image_urls(product))
+
+    def _prioritize_products_with_images(self, products: list[dict]) -> list[dict]:
+        if len(products) < 2:
+            return list(products)
+        return sorted(products, key=lambda item: 0 if self._product_has_image(item) else 1)
+
+    def _normalize_product(self, product: dict) -> dict:
+        item = dict(product)
+        resolved_images = self._extract_resolved_image_urls(item)
+        item["id"] = item.get("id") or item.get("product_id") or item.get("url") or item.get("title")
+        item["image"] = resolved_images[0] if resolved_images else ""
+        item["image_url"] = item["image"]
+        item["image_urls"] = item["image"]
         item["merchant"] = item.get("merchant") or item.get("brand") or ""
         return item
 
@@ -898,10 +1051,16 @@ class MVPCommerceAgent:
         if compare_override:
             intent = IntentType.TEXT_SEARCH
         else:
+            recent_context = self._build_turn_analysis_context(session_id, message, active_instance)
             turn_analysis = self.router.analyze_turn(
                 message,
                 has_image=image_bytes is not None,
+                recent_context=recent_context,
             )
+            if self._should_continue_active_search(message, active_instance, turn_analysis):
+                turn_analysis.intent = IntentType.TEXT_SEARCH
+                if not turn_analysis.rewritten_query:
+                    turn_analysis.rewritten_query = message
             self._store_preferences_from_analysis(user_id, session_id, turn_analysis)
             intent = turn_analysis.intent
         self._log_stage("intent_detection", t0)
@@ -1140,6 +1299,7 @@ class MVPCommerceAgent:
             top_k=self.ac.top_k_final,
             preference_context=preference_context,
         )
+        reranked = self._prioritize_products_with_images(reranked)
         self._log_stage("reranking", t0)
 
         if self.ac.use_worksheets and definition and worksheet_instance:
@@ -1315,6 +1475,7 @@ class MVPCommerceAgent:
             top_k=self.ac.top_k_final,
             preference_context=preference_context,
         )
+        reranked = self._prioritize_products_with_images(reranked)
         self._log_stage("reranking", t0)
 
         memory_context = ""

@@ -75,7 +75,9 @@ _APPAREL_PRODUCT_TYPES = {
 
 _COMPARE_PATTERNS = re.compile(
     r"\b(compare|versus|vs\.?|which\s+(one|is)\s+better|difference\s+between|"
-    r"pros\s+and\s+cons|head\s+to\s+head)\b",
+    r"pros\s+and\s+cons|head\s+to\s+head|which\s+one\s+do\s+you\s+recommend|"
+    r"which\s+one\s+should\s+i\s+(get|buy)|best\s+one|best\s+option|top\s+pick|"
+    r"based\s+on\s+reviews?|based\s+on\s+ratings?)\b",
     re.IGNORECASE,
 )
 
@@ -86,6 +88,38 @@ _ORDINAL_MAP = {
     "fourth": 3,
     "fifth": 4,
 }
+
+_COMMON_COLORS = {
+    "black",
+    "white",
+    "blue",
+    "navy",
+    "red",
+    "green",
+    "olive",
+    "yellow",
+    "orange",
+    "purple",
+    "pink",
+    "brown",
+    "beige",
+    "tan",
+    "cream",
+    "gray",
+    "grey",
+    "silver",
+    "gold",
+    "burgundy",
+}
+
+_SIZE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bextra\s+small\b|\bxs\b", re.IGNORECASE), "xs"),
+    (re.compile(r"\bsmall\b|\bs\b", re.IGNORECASE), "small"),
+    (re.compile(r"\bmedium\b|\bm\b", re.IGNORECASE), "medium"),
+    (re.compile(r"\blarge\b|\bl\b", re.IGNORECASE), "large"),
+    (re.compile(r"\bextra\s+large\b|\bxl\b", re.IGNORECASE), "xl"),
+    (re.compile(r"\bxxl\b|\b2xl\b", re.IGNORECASE), "xxl"),
+]
 
 
 def _singularize(value: str) -> str:
@@ -363,6 +397,8 @@ class WorksheetEngine:
         )
 
         product_type = filters.get("category") or self._infer_product_type(text)
+        color = filters.get("color") or self._infer_color(text)
+        size = filters.get("size") or self._infer_size(text)
 
         updates: dict[str, Any] = {
             "product_type": _singularize(str(product_type)) if product_type else None,
@@ -370,8 +406,8 @@ class WorksheetEngine:
             "price_min": filters.get("price_min"),
             "price_max": filters.get("price_max"),
             "brand": filters.get("brand"),
-            "color": filters.get("color"),
-            "size": filters.get("size"),
+            "color": color,
+            "size": size,
         }
         return updates
 
@@ -380,6 +416,19 @@ class WorksheetEngine:
         for keyword in _PRODUCT_TYPE_KEYWORDS:
             if keyword in tokens:
                 return _singularize(keyword)
+        return None
+
+    def _infer_color(self, text: str) -> str | None:
+        tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
+        for color in _COMMON_COLORS:
+            if color in tokens:
+                return color
+        return None
+
+    def _infer_size(self, text: str) -> str | None:
+        for pattern, normalized in _SIZE_PATTERNS:
+            if pattern.search(text or ""):
+                return normalized
         return None
 
     def _compose_rewritten_query(self, values: dict[str, Any], fallback: str) -> str:
@@ -463,6 +512,20 @@ class WorksheetEngine:
 
         if len(deduped) >= 2:
             return deduped[:4]
+
+        if any(
+            signal in lowered
+            for signal in [
+                "which one",
+                "best one",
+                "best option",
+                "top pick",
+                "recommend",
+                "based on reviews",
+                "based on ratings",
+            ]
+        ):
+            return list(range(min(pool_size, 3)))
 
         return [0, 1]
 

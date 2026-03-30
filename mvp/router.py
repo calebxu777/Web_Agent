@@ -71,6 +71,12 @@ Rules:
 - Budgets in preferences must be numbers without currency symbols.
 - If the message is general conversation, keep tags empty, filters empty, rewritten_query empty.
 - If image_attached is true, set intent to image_search unless the user is clearly asking for something else.
+- Use recent_context when present to resolve short follow-ups. Examples:
+  - "blue ones" after a t-shirt search should stay text_search and inherit t-shirt as the subject.
+  - "large please" after a jacket search should stay text_search and add size=large.
+  - "which one do you recommend based on reviews" after recent results refers to the recent result set, not a fresh greeting.
+- Prefer continuing an active product search over classifying short follow-ups as general_talk.
+- Respect explicit new constraints in the current message, but use recent_context to recover omitted product type or category.
 
 Return ONLY JSON with this shape:
 {
@@ -200,13 +206,23 @@ class MVPRouter:
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
 
-    def detect_intent(self, user_message: str, has_image: bool = False) -> IntentType:
-        return self.analyze_turn(user_message, has_image=has_image).intent
+    def detect_intent(
+        self,
+        user_message: str,
+        has_image: bool = False,
+        recent_context: dict | None = None,
+    ) -> IntentType:
+        return self.analyze_turn(user_message, has_image=has_image, recent_context=recent_context).intent
 
-    def decompose_query(self, user_message: str) -> DecomposedQuery:
-        return self.analyze_turn(user_message).to_decomposed_query(user_message)
+    def decompose_query(self, user_message: str, recent_context: dict | None = None) -> DecomposedQuery:
+        return self.analyze_turn(user_message, recent_context=recent_context).to_decomposed_query(user_message)
 
-    def analyze_turn(self, user_message: str, has_image: bool = False) -> TurnAnalysisResult:
+    def analyze_turn(
+        self,
+        user_message: str,
+        has_image: bool = False,
+        recent_context: dict | None = None,
+    ) -> TurnAnalysisResult:
         message = user_message.strip()
         heuristic = IntentType.IMAGE_SEARCH if has_image else self._heuristic_intent(user_message)
 
@@ -220,6 +236,7 @@ class MVPRouter:
                     {
                         "message": user_message,
                         "image_attached": has_image,
+                        "recent_context": recent_context or {},
                     }
                 ),
                 model=self.model_name,

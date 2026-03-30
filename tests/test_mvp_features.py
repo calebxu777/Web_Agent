@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from mvp.agent import MVPCommerceAgent, MVPConfig, PipelineStage
 from mvp.api import resolve_env_flag, resolve_mvp_act_mode
+from mvp.preference_models import TurnAnalysisResult
 from mvp.router import MVPRouter
 from mvp.worksheet_store import InMemoryWorksheetStore
 from src.schema import DecomposedQuery, IntentType
@@ -33,6 +34,14 @@ class FakeRouter:
 
     def decompose_query(self, _message: str) -> DecomposedQuery:
         return self.query
+
+    def analyze_turn(self, _message: str, has_image: bool = False, recent_context: dict | None = None) -> TurnAnalysisResult:
+        return TurnAnalysisResult(
+            intent=self.query.intent,
+            tags=list(self.query.tags),
+            filters=dict(self.query.filters),
+            rewritten_query=self.query.rewritten_query,
+        )
 
     def rerank(
         self,
@@ -69,7 +78,11 @@ class FakeMasterBrain:
 
 
 class FakeRetriever:
+    def __init__(self):
+        self.last_query = None
+
     def search_text(self, _query):
+        self.last_query = _query
         return [
             {
                 "product_id": "p1",
@@ -78,6 +91,26 @@ class FakeRetriever:
                 "brand": "Test Brand",
             }
         ]
+
+
+class FollowupRouter(FakeRouter):
+    def __init__(self, analyses: list[TurnAnalysisResult]):
+        self.analyses = analyses
+        self.query = None
+
+    def analyze_turn(self, _message: str, has_image: bool = False, recent_context: dict | None = None) -> TurnAnalysisResult:
+        if self.analyses:
+            result = self.analyses.pop(0)
+            self.query = result.to_decomposed_query(_message, default_intent=IntentType.TEXT_SEARCH)
+            return result
+        return TurnAnalysisResult(intent=IntentType.GENERAL_TALK)
+
+    def decompose_query(self, _message: str) -> DecomposedQuery:
+        return self.query or DecomposedQuery(
+            intent=IntentType.TEXT_SEARCH,
+            original_query=_message,
+            rewritten_query=_message,
+        )
 
 
 class MVPFeatureTests(unittest.TestCase):
@@ -149,6 +182,29 @@ class MVPFeatureTests(unittest.TestCase):
             normalized["image"],
             "https://storage.googleapis.com/web-agent-data-caleb-2026/amazon/amz_B000000001.jpg",
         )
+
+    def test_live_text_search_product_normalization_uses_thumbnail_fallback(self):
+        product = {
+            "title": "Rain Shell",
+            "thumbnail": "amazon/amz_B999999999.jpg",
+        }
+
+        normalized = self.agent._normalize_product(product)
+
+        self.assertEqual(
+            normalized["image"],
+            "https://storage.googleapis.com/web-agent-data-caleb-2026/amazon/amz_B999999999.jpg",
+        )
+
+    def test_prioritize_products_with_images_moves_imageless_items_back(self):
+        products = [
+            {"product_id": "1", "title": "No Image Jacket"},
+            {"product_id": "2", "title": "Image Jacket", "image_urls": "amazon/amz_B000000010.jpg"},
+        ]
+
+        ranked = self.agent._prioritize_products_with_images(products)
+
+        self.assertEqual(ranked[0]["product_id"], "2")
 
     def test_text_query_sanitizer_drops_unknown_category_filter(self):
         query = DecomposedQuery(
@@ -327,6 +383,76 @@ class MVPFeatureTests(unittest.TestCase):
 
         self.assertFalse(worksheet_events)
         self.assertTrue(product_events)
+
+    def test_active_search_followup_short_color_reuses_previous_product_type(self):
+        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_worksheets=True))
+        agent.sqlite = FakeSQLite()
+        agent.router = FollowupRouter(
+            [
+                TurnAnalysisResult(
+                    intent=IntentType.TEXT_SEARCH,
+                    tags=["t-shirt"],
+                    filters={"category": "t-shirt"},
+                    rewritten_query="t-shirt",
+                ),
+                TurnAnalysisResult(
+                    intent=IntentType.GENERAL_TALK,
+                    tags=[],
+                    filters={},
+                    rewritten_query="",
+                ),
+            ]
+        )
+        agent.retriever = FakeRetriever()
+        agent.master_brain = FakeMasterBrain()
+        agent._initialized = True
+
+        async def collect(message: str):
+            return [
+                json.loads(event)
+                async for event in agent.handle_message(
+                    user_id="user-1",
+                    session_id="session-followup",
+                    message=message,
+                    image_bytes=None,
+                    web_search_enabled=False,
+                )
+            ]
+
+        asyncio.run(collect("recommend some t-shirts"))
+        events = asyncio.run(collect("blue"))
+
+        product_events = [event for event in events if event.get("type") == "products"]
+        self.assertTrue(product_events)
+        self.assertEqual(agent.retriever.last_query.filters.get("color"), "blue")
+        self.assertIn("shirt", agent.retriever.last_query.rewritten_query.lower())
+
+    def test_followup_recommendation_question_uses_recent_results_compare(self):
+        agent = MVPCommerceAgent(TEST_CONFIG, MVPConfig(use_worksheets=True))
+        search_definition = agent.worksheet_registry.get("product_search")
+        search_instance = agent.worksheet_engine.create_instance(search_definition)
+        search_instance.result_refs["last_products"] = [
+            {"product_id": "p1", "title": "First Jacket", "price": 100.0},
+            {"product_id": "p2", "title": "Second Jacket", "price": 120.0},
+            {"product_id": "p3", "title": "Third Jacket", "price": 150.0},
+        ]
+        agent.worksheet_store.save("session-followup-compare", search_instance)
+
+        self.assertTrue(
+            agent._should_handle_as_compare(
+                "which one do you recommend based on reviews",
+                search_instance,
+            )
+        )
+
+        compare_definition, compare_instance = agent._prepare_compare_worksheet(
+            "session-followup-compare",
+            "which one do you recommend based on reviews",
+        )
+
+        self.assertEqual(compare_definition.name, "compare_products")
+        self.assertEqual(len(compare_instance.result_refs["comparison_products"]), 3)
+        self.assertIn("reviews", compare_instance.values["comparison_dimensions"])
 
     def test_compare_workflow_uses_last_search_results(self):
         agent = MVPCommerceAgent(

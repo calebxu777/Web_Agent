@@ -62,7 +62,12 @@ class AnalysisRouter:
         self.analyses = analyses or {}
         self.last_preference_context = ""
 
-    def analyze_turn(self, message: str, has_image: bool = False) -> TurnAnalysisResult:
+    def analyze_turn(
+        self,
+        message: str,
+        has_image: bool = False,
+        recent_context: dict | None = None,
+    ) -> TurnAnalysisResult:
         if has_image:
             return self.analyses.get(
                 message,
